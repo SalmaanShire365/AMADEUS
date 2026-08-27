@@ -135,7 +135,7 @@ def open_db() -> sqlite3.Connection:
 
 
 def load_meta() -> dict:
-    if META_PATH.exists():
+    if META_PATH.exists() and DB_PATH.exists():
         return json.loads(META_PATH.read_text())
     return {"files": {}}
 
@@ -219,8 +219,9 @@ def chunk_file(path: Path) -> list[tuple[int, int, str]]:
 # =========================
 def cmd_index(root: str) -> None:
     root_path = Path(root).resolve()
+    db_existed = DB_PATH.exists()
     db = open_db()
-    meta = load_meta()
+    meta = load_meta() if db_existed else {"files" : {}}
     seen, added, skipped = set(), 0, 0
 
     for path in sorted(root_path.rglob("*")):

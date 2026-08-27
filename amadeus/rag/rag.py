@@ -26,12 +26,13 @@ from pathlib import Path
 # CONFIG
 # =========================
 OLLAMA_URL = os.environ.get("AMADEUS_OLLAMA_URL", "http://localhost:11434")
-EMBED_MODEL = os.environ.get("AMADEUS_EMBED_MODEL", "nomic-embed-text")
+EMBED_MODEL = "unclemusclez/jina-embeddings-v2-base-code"
+USE_TASK_PREFIX = False
 EMBED_DIM = 768
 TOP_K = int(os.environ.get("AMADEUS_RAG_TOP_K", "8"))
 # Cosine distance cutoff. Lower = stricter. Tune against your own repos:
 # run `rag.py query "<question>" --debug` and inspect the distances.
-DISTANCE_THRESHOLD = float(os.environ.get("AMADEUS_RAG_THRESHOLD", "0.38"))
+DISTANCE_THRESHOLD = float(os.environ.get("AMADEUS_RAG_THRESHOLD", "0.78"))
 
 MAX_CHUNK_CHARS = 1500
 OVERLAP_CHARS = 200
@@ -59,6 +60,15 @@ TEXT_EXTS = CODE_EXTS | {
     ".html", ".css", ".cfg", ".ini", ".env.example",
 }
 
+
+IGNORE_DIRS = {
+    ".git", ".amadeus", "node_modules", "venv", ".venv", "__pycache__",
+    "dist", "build", "target", ".idea", ".vscode", ".cache", ".claude",
+    "eval",
+}
+
+
+
 # Top-level definition boundaries across the languages I actually use.
 DEF_RE = re.compile(
     r"^(def |class |async def |function |fn |func |pub fn |impl |"
@@ -73,7 +83,7 @@ DEF_RE = re.compile(
 def embed(text: str, is_query: bool = False) -> list[float]:
     """Embed text via Ollama. nomic-embed-text is trained with task
     prefixes — using them measurably improves retrieval."""
-    prefix = "search_query: " if is_query else "search_document: "
+    prefix = ("search_query: " if is_query else "search_document: ") if USE_TASK_PREFIX else ""
     payload = json.dumps(
         {"model": EMBED_MODEL, "prompt": prefix + text}
     ).encode()
@@ -138,18 +148,30 @@ def save_meta(meta: dict) -> None:
 # CHUNKING
 # =========================
 def split_fixed(text: str, start_line: int) -> list[tuple[int, int, str]]:
-    """Fallback: fixed-size chunks with overlap. Returns (start, end, text)."""
+    """Fallback: line-aligned chunks with line overlap. Returns (start, end, text)."""
+    lines = text.splitlines(keepends=True)
+    if not lines:
+        return []
     out = []
-    pos = 0
-    while pos < len(text):
-        piece = text[pos:pos + MAX_CHUNK_CHARS]
-        line_offset = text[:pos].count("\n")
-        out.append((
-            start_line + line_offset,
-            start_line + line_offset + piece.count("\n"),
-            piece,
-        ))
-        pos += MAX_CHUNK_CHARS - OVERLAP_CHARS
+    i = 0
+    while i < len(lines):
+        piece_lines, size, j = [], 0, i
+        while j < len(lines) and (not piece_lines or size + len(lines[j]) <= MAX_CHUNK_CHARS):
+            piece_lines.append(lines[j])
+            size += len(lines[j])
+            j += 1
+        piece = "".join(piece_lines)
+        if piece.strip():
+            out.append((start_line + i, start_line + j - 1, piece))
+        if j >= len(lines):
+            break
+        # step back a few lines for overlap, but always advance
+        overlap = 0
+        back = 0
+        while back < len(piece_lines) - 1 and overlap + len(piece_lines[-1 - back]) <= OVERLAP_CHARS:
+            overlap += len(piece_lines[-1 - back])
+            back += 1
+        i = max(i + 1, j - back)
     return out
 
 

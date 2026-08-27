@@ -1,0 +1,20 @@
+{"query": "How does rag.py decide where the on-disk vector index lives?", "expected": ["rag/rag.py"]}
+{"query": "What JSON actions can the AMADEUS agent emit on each turn?", "expected": ["agent/agent.py"]}
+{"query": "How are source code files split into chunks before embedding?", "expected": ["rag/rag.py"]}
+{"query": "TODO", "expected": ["TODO"]}
+{"query": "TODO", "expected": ["TODO"]}
+{"query": "TODO", "expected": ["TODO"]}
+{"query": "TODO", "expected": ["TODO"]}
+{"query": "TODO", "expected": ["TODO"]}
+{"query": "TODO", "expected": ["TODO"]}
+{"query": "TODO", "expected": ["TODO"]}
+{"query": "TODO", "expected": ["TODO"]}
+{"query": "TODO", "expected": ["TODO"]}
+{"query": "TODO", "expected": ["TODO"]}
+{"query": "TODO", "expected": ["TODO"]}
+{"query": "TODO", "expected": ["TODO"]}
+{"query": "TODO", "expected": ["TODO"]}
+{"query": "TODO", "expected": ["TODO"]}
+{"query": "TODO", "expected": ["TODO"]}
+{"query": "TODO", "expected": ["TODO"]}
+{"query": "TODO", "expected": ["TODO"]}

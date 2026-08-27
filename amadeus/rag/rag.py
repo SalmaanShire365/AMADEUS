@@ -30,10 +30,13 @@ EMBED_MODEL = "unclemusclez/jina-embeddings-v2-base-code"
 USE_TASK_PREFIX = False
 EMBED_DIM = 768
 TOP_K = int(os.environ.get("AMADEUS_RAG_TOP_K", "8"))
-# Cosine distance cutoff. Lower = stricter. Tune against your own repos:
-# run `rag.py query "<question>" --debug` and inspect the distances.
+# Relative cutoff: keep hits within DISTANCE_MARGIN of the closest match.
+# Absolute thresholds don't work here — distance bands shift per query
+# (0.69-0.78 on one, 0.49-0.59 on another), and an off-topic question
+# can score better than a real one's tail. Width is tunable; relevance
+# is not filterable at this layer.
 DISTANCE_THRESHOLD = float(os.environ.get("AMADEUS_RAG_THRESHOLD", "0.78"))
-
+DISTANCE_MARGIN = float(os.environ.get("AMADEUS_RAG_MARGIN", "0.06"))
 MAX_CHUNK_CHARS = 1500
 OVERLAP_CHARS = 200
 
@@ -316,10 +319,13 @@ def cmd_query(question: str, debug: bool = False) -> None:
         for fp, s, e, _, dist in rows:
             print(f"  {dist:.4f}  {fp}:{s}-{e}", file=sys.stderr)
 
-    rows = [r for r in rows if r[4] < DISTANCE_THRESHOLD]
     if not rows:
         print("NO_RELEVANT_CONTEXT")
         return
+    
+    best = rows[0][4]
+    rows = [r for r in rows if r[4] <= best + DISTANCE_MARGIN]
+   
 
     context = "\n\n".join(
         f"### {fp} (lines {s}-{e})\n```\n{content}\n```"

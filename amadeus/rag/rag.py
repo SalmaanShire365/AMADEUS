@@ -40,7 +40,7 @@ DISTANCE_MARGIN = float(os.environ.get("AMADEUS_RAG_MARGIN", "0.06"))
 MAX_CHUNK_CHARS = 1500
 OVERLAP_CHARS = 200
 
-DATA_DIR = Path(".amadeus")
+DATA_DIR = Path(os.environ.get("AMADEUS_RAG_DATA_DIR", ".amadeus")).resolve()
 DB_PATH = DATA_DIR / "index.db"
 META_PATH = DATA_DIR / "index_meta.json"
 
@@ -226,7 +226,7 @@ def cmd_index(root: str) -> None:
     db = open_db()
     meta = load_meta() if db_existed else {"files" : {}}
     seen, added, skipped = set(), 0, 0
-
+    print(f"index: {DB_PATH}")
     for path in sorted(root_path.rglob("*")):
         if any(part in IGNORE_DIRS for part in path.parts):
             continue
@@ -303,7 +303,7 @@ Question: {question}"""
 
 def cmd_query(question: str, debug: bool = False) -> None:
     if not DB_PATH.exists():
-        sys.exit("error: no index found. Run `index <dir>` first.")
+        sys.exit(f"error: no index found at {DB_PATH}. Run `index <dir>` first.")
     db = open_db()
     qvec = serialize_f32(embed(question, is_query=True))
 

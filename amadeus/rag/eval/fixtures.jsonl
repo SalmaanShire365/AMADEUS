@@ -1,20 +1,8 @@
-{"query": "How does rag.py decide where the on-disk vector index lives?", "expected": ["rag/rag.py"]}
-{"query": "What JSON actions can the AMADEUS agent emit on each turn?", "expected": ["agent/agent.py"]}
-{"query": "How are source code files split into chunks before embedding?", "expected": ["rag/rag.py"]}
-{"query": "TODO", "expected": ["TODO"]}
-{"query": "TODO", "expected": ["TODO"]}
-{"query": "TODO", "expected": ["TODO"]}
-{"query": "TODO", "expected": ["TODO"]}
-{"query": "TODO", "expected": ["TODO"]}
-{"query": "TODO", "expected": ["TODO"]}
-{"query": "TODO", "expected": ["TODO"]}
-{"query": "TODO", "expected": ["TODO"]}
-{"query": "TODO", "expected": ["TODO"]}
-{"query": "TODO", "expected": ["TODO"]}
-{"query": "TODO", "expected": ["TODO"]}
-{"query": "TODO", "expected": ["TODO"]}
-{"query": "TODO", "expected": ["TODO"]}
-{"query": "TODO", "expected": ["TODO"]}
-{"query": "TODO", "expected": ["TODO"]}
-{"query": "TODO", "expected": ["TODO"]}
-{"query": "TODO", "expected": ["TODO"]}
+{"query": "how does the deacon health check work", "expected": ["cmd/deacon.go"]}
+{"query": "what happens when a polecat finishes work", "expected": ["witness/handlers.go"]}
+{"query": "dolt sql server connection", "expected": ["doltserver/doltserver.go"]}
+{"query": "how are convoys stored in dolt", "expected": ["convoy/operations.go", "doltserver/doltserver.go"]}
+{"query": "how does the witness detect a stale heartbeat", "expected": ["deacon/heartbeat.go", "witness/handlers.go"]}
+{"query": "how are rigs registered", "expected": ["cmd/rig.go", "rig/manager.go"]}
+{"query": "how does sling dispatch work with tmux sessions", "expected": ["cmd/sling_helpers.go", "tmux/tmux.go"]}
+{"query": "what does gt doctor check", "expected": ["cmd/doctor.go"]}

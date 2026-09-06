@@ -1,499 +1,580 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AMADEUS — local codebase retrieval</title>
-<meta name="description" content="A fully local RAG pipeline for codebases. Ask a question, see which chunks come back and how far away they are.">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AMADEUS — Codebase Intelligence, Locally</title>
+<meta name="description" content="A local-first codebase retrieval system, built in the open. Current status, measured results, build log, and where it's headed.">
+<meta property="og:title" content="AMADEUS — Codebase Intelligence, Locally">
+<meta property="og:description" content="Ask a codebase a question, get an answer grounded in its own source. Nothing leaves the machine. Build log and measured results.">
 <style>
   :root{
-    --ground:#E7E8E3;
-    --panel:#F2F3EF;
-    --ink:#14181A;
-    --ink-soft:#5C6360;
-    --rule:#C7C9C2;
-    --signal:#1F3FD8;
-    --hit:#186B4F;
-    --miss:#9E3722;
-    --shadow:rgba(20,24,26,.07);
-    --step:1.6rem;
-  }
-  @media (prefers-color-scheme: dark){
-    :root{
-      --ground:#141816;
-      --panel:#1C211E;
-      --ink:#E8EAE4;
-      --ink-soft:#9AA29D;
-      --rule:#333A36;
-      --signal:#7D95FF;
-      --hit:#4FBF95;
-      --miss:#E0755A;
-      --shadow:rgba(0,0,0,.35);
-    }
+    --bg:#080b10;--panel:#0d121a;
+    --text:#e8edf5;--muted:#8e9aaa;--dim:#6c7787;
+    --line:#202a38;--line2:#2b3849;
+    --accent:#77e6c3;--accent2:#8bb8ff;--warn:#ffd27a;--bad:#ff9a7a;
+    --max:1120px;
   }
   *{box-sizing:border-box}
-  html{-webkit-text-size-adjust:100%}
+  html{scroll-behavior:smooth}
+  @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{transition:none!important;animation:none!important}}
   body{
-    margin:0;
-    background:var(--ground);
-    color:var(--ink);
-    font-family:"Space Grotesk",system-ui,-apple-system,Segoe UI,sans-serif;
-    font-size:17px;
-    line-height:1.55;
+    margin:0;background:radial-gradient(circle at 78% -12%,#14253a 0,transparent 38%),var(--bg);
+    color:var(--text);
+    font:16px/1.65 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
     -webkit-font-smoothing:antialiased;
   }
-  .mono{font-family:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace}
-  .wrap{max-width:960px;margin:0 auto;padding:0 24px}
-  a{color:var(--signal)}
-  :focus-visible{outline:2px solid var(--signal);outline-offset:3px;border-radius:2px}
+  a{color:inherit}
+  .wrap{max-width:var(--max);margin:auto;padding:0 24px}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:3px}
 
-  /* ---------- masthead ---------- */
-  header{padding:72px 0 40px}
-  h1{
-    font-size:clamp(2.6rem,7vw,4.4rem);
-    line-height:.95;
-    letter-spacing:-.035em;
-    font-weight:700;
-    margin:0 0 .35em;
-  }
-  .standfirst{
-    max-width:56ch;
-    font-size:1.15rem;
-    color:var(--ink-soft);
-    margin:0 0 28px;
-  }
-  .facts{
-    display:flex;flex-wrap:wrap;gap:0;
-    border-top:1px solid var(--rule);
-    border-bottom:1px solid var(--rule);
-  }
-  .fact{
-    flex:1 1 140px;padding:14px 18px 14px 0;
-  }
-  .fact b{display:block;font-size:1.45rem;letter-spacing:-.02em;font-weight:500}
-  .fact span{font-size:.82rem;color:var(--ink-soft)}
+  nav{position:sticky;top:0;z-index:20;background:rgba(8,11,16,.85);backdrop-filter:blur(16px);border-bottom:1px solid var(--line)}
+  nav .inner{height:60px;display:flex;align-items:center;justify-content:space-between;gap:20px}
+  .brand{font-weight:800;letter-spacing:.14em;text-decoration:none;font-size:15px}
+  .brand span{color:var(--accent)}
+  .links{display:flex;gap:20px;flex-wrap:wrap;font-size:14px;color:var(--muted)}
+  .links a{text-decoration:none}.links a:hover{color:var(--text)}
 
-  /* ---------- instrument ---------- */
-  section{padding:56px 0}
-  h2{font-size:1.5rem;letter-spacing:-.02em;margin:0 0 6px;font-weight:500}
-  .lede{color:var(--ink-soft);max-width:62ch;margin:0 0 26px}
+  .hero{padding:88px 0 60px;border-bottom:1px solid var(--line)}
+  .eyebrow{color:var(--accent);font:600 12px/1.2 ui-monospace,monospace;letter-spacing:.14em}
+  h1{font-size:clamp(42px,8vw,78px);line-height:.98;letter-spacing:-.055em;margin:18px 0 22px;font-weight:800}
+  h1 em{font-style:normal;color:var(--accent)}
+  .lead{max-width:66ch;color:#b9c3d1;font-size:19px}
+  .lead + .lead{margin-top:14px;font-size:17px;color:var(--muted)}
+  .buttons{display:flex;gap:10px;flex-wrap:wrap;margin:30px 0 0}
+  .btn{display:inline-block;padding:10px 16px;border:1px solid var(--line2);border-radius:9px;text-decoration:none;background:var(--panel);font-size:15px}
+  .btn:hover{border-color:var(--accent)}
+  .btn.primary{background:var(--accent);color:#07100d;border-color:var(--accent);font-weight:700}
 
-  .asks{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:26px}
-  .ask{
-    font:inherit;font-size:.92rem;
-    background:transparent;color:var(--ink);
-    border:1px solid var(--rule);
-    border-radius:999px;
-    padding:7px 15px;cursor:pointer;
-    transition:background .15s,border-color .15s,color .15s;
-  }
-  .ask:hover{border-color:var(--signal)}
-  .ask[aria-pressed="true"]{background:var(--ink);color:var(--ground);border-color:var(--ink)}
+  section{padding:74px 0;border-bottom:1px solid var(--line)}
+  h2{font-size:clamp(28px,4.5vw,38px);line-height:1.12;letter-spacing:-.035em;margin:14px 0 16px;font-weight:700}
+  h3{margin:0 0 8px;font-size:18px;font-weight:600}
+  .intro{max-width:70ch;color:var(--muted);font-size:17px;margin:0 0 30px}
 
-  .instrument{
-    background:var(--panel);
-    border:1px solid var(--rule);
-    padding:22px 22px 10px;
-  }
-  .statusline{
-    display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;
-    font-size:.8rem;color:var(--ink-soft);
-    padding-bottom:14px;margin-bottom:16px;
-    border-bottom:1px solid var(--rule);
-  }
+  .status{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+  .col{padding:24px;border-right:1px solid var(--line)}
+  .col:last-child{border-right:0}
+  .col h3{display:flex;align-items:center;gap:9px;margin-bottom:14px}
+  .bullet{width:8px;height:8px;border-radius:50%;flex:none}
+  .on .bullet{background:var(--accent)}
+  .part .bullet{background:var(--warn)}
+  .off .bullet{background:var(--dim)}
+  .col ul{margin:0;padding-left:18px;color:var(--muted);font-size:15px}
+  .col li{margin:9px 0}
+  .col.off ul{color:var(--dim)}
 
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:22px}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px}
+  .stat strong{display:block;font-size:26px;letter-spacing:-.02em}
+  .stat small{color:var(--muted)}
+
+  .asks{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px}
+  .ask{font:inherit;font-size:14px;background:var(--panel);color:var(--muted);border:1px solid var(--line2);border-radius:999px;padding:7px 15px;cursor:pointer}
+  .ask:hover{color:var(--text);border-color:var(--accent)}
+  .ask[aria-pressed="true"]{background:var(--accent);color:#07100d;border-color:var(--accent);font-weight:600}
+  .instrument{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px 20px 8px}
+  .statusline{display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;font:13px ui-monospace,monospace;color:var(--muted);padding-bottom:13px;margin-bottom:14px;border-bottom:1px solid var(--line)}
   .scale{position:relative}
-  .cut{
-    position:absolute;top:-4px;bottom:26px;width:1px;
-    background:var(--signal);
-    opacity:0;transition:opacity .3s,left .5s cubic-bezier(.2,.7,.3,1);
-    z-index:2;
-  }
-  .cut::after{
-    content:"margin cutoff";
-    position:absolute;top:-2px;left:6px;
-    font-family:"IBM Plex Mono",monospace;
-    font-size:.68rem;color:var(--signal);white-space:nowrap;
-  }
+  .cut{position:absolute;top:-4px;bottom:28px;width:1px;background:var(--accent2);opacity:0;transition:opacity .3s,left .5s cubic-bezier(.2,.7,.3,1);z-index:2}
+  .cut::after{content:"context cutoff";position:absolute;top:-3px;left:7px;font:11px ui-monospace,monospace;color:var(--accent2);white-space:nowrap}
   .cut.on{opacity:1}
-
-  .row{
-    display:grid;
-    grid-template-columns:minmax(0,1fr) 62px;
-    align-items:center;
-    gap:12px;
-    padding:5px 0;
-    opacity:0;
-    transform:translateY(4px);
-  }
-  .row.in{opacity:1;transform:none;transition:opacity .32s ease,transform .32s ease}
-  .row.cutoff-out{opacity:.32}
+  .row{display:grid;grid-template-columns:minmax(0,1fr) 60px;align-items:center;gap:12px;padding:4px 0;opacity:0;transform:translateY(4px)}
+  .row.in{opacity:1;transform:none;transition:opacity .32s,transform .32s}
+  .row.out{opacity:.3}
   .track{position:relative;height:22px}
-  .track::before{
-    content:"";position:absolute;left:0;right:0;top:50%;
-    border-top:1px dotted var(--rule);
-  }
-  .pip{
-    position:absolute;top:50%;transform:translate(-50%,-50%);
-    display:flex;align-items:center;gap:7px;
-    white-space:nowrap;
-    transition:left .5s cubic-bezier(.2,.7,.3,1);
-  }
-  .dot{width:9px;height:9px;border-radius:50%;background:var(--ink-soft);flex:none}
-  .row.want .dot{background:var(--hit)}
-  .path{font-family:"IBM Plex Mono",monospace;font-size:.78rem}
-  .row.want .path{color:var(--hit);font-weight:500}
-  .dist{
-    font-family:"IBM Plex Mono",monospace;font-size:.78rem;
-    color:var(--ink-soft);text-align:right;
-  }
-  .axis{
-    display:flex;justify-content:space-between;
-    font-family:"IBM Plex Mono",monospace;font-size:.7rem;color:var(--ink-soft);
-    border-top:1px solid var(--rule);
-    padding:8px 0 14px;margin-top:6px;
-  }
+  .track::before{content:"";position:absolute;left:0;right:0;top:50%;border-top:1px dotted var(--line2)}
+  .pip{position:absolute;top:50%;transform:translate(-50%,-50%);display:flex;align-items:center;gap:7px;white-space:nowrap;transition:left .5s cubic-bezier(.2,.7,.3,1)}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--dim);flex:none}
+  .row.want .dot{background:var(--accent)}
+  .path{font:12px ui-monospace,monospace;color:var(--muted)}
+  .row.want .path{color:var(--accent)}
+  .dist{font:12px ui-monospace,monospace;color:var(--dim);text-align:right}
+  .axis{display:flex;justify-content:space-between;font:11px ui-monospace,monospace;color:var(--dim);border-top:1px solid var(--line);padding:8px 0 12px;margin-top:6px}
+  .verdict{border-top:1px solid var(--line);padding:16px 0 18px}
+  .verdict p{margin:0 0 12px;color:var(--muted)}
+  .tag{font:11px ui-monospace,monospace;border:1px solid currentColor;border-radius:3px;padding:2px 6px;margin-right:9px;letter-spacing:.06em}
+  .good{color:var(--accent)}.miss{color:var(--bad)}
+  .answer{background:#05070a;border-left:2px solid var(--accent2);border-radius:0 8px 8px 0;padding:14px 16px;font-size:15px}
+  .answer ul{margin:0;padding-left:18px;color:#b9c3d1}
+  .answer li{margin:0 0 8px}.answer li:last-child{margin:0}
+  .src{font:11px ui-monospace,monospace;color:var(--accent2)}
 
-  .verdict{
-    border-top:1px solid var(--rule);
-    padding:18px 0 20px;
-  }
-  .verdict p{margin:0 0 12px}
-  .verdict .tag{
-    font-family:"IBM Plex Mono",monospace;font-size:.72rem;
-    border:1px solid currentColor;border-radius:2px;
-    padding:1px 6px;margin-right:9px;
-  }
-  .good{color:var(--hit)}
-  .bad{color:var(--miss)}
-  .answer{
-    background:var(--ground);
-    border-left:2px solid var(--signal);
-    padding:14px 16px;
-    font-size:.92rem;
-  }
-  .answer ul{margin:0;padding-left:18px}
-  .answer li{margin-bottom:8px}
-  .answer li:last-child{margin-bottom:0}
-  .src{font-family:"IBM Plex Mono",monospace;font-size:.75rem;color:var(--signal)}
+  .findings{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:26px}
+  .finding{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px}
+  .finding .num{font:600 22px ui-monospace,monospace;letter-spacing:-.02em}
+  .finding p{color:var(--muted);font-size:15px;margin:8px 0 0}
+  .bar{height:6px;background:#1c2531;border-radius:20px;margin:12px 0 0;overflow:hidden}
+  .bar i{display:block;height:100%;border-radius:20px;background:var(--accent)}
+  .bar.down i{background:var(--bad)}
+  .bar.flat i{background:var(--dim)}
 
-  /* ---------- ledger ---------- */
-  .ledger{border-top:1px solid var(--rule)}
-  .entry{
-    display:grid;grid-template-columns:1fr 210px;gap:20px;
-    padding:20px 0;border-bottom:1px solid var(--rule);
-    align-items:start;
-  }
-  .entry h3{margin:0 0 4px;font-size:1rem;font-weight:500}
-  .entry p{margin:0;color:var(--ink-soft);font-size:.92rem;max-width:52ch}
-  .delta{font-family:"IBM Plex Mono",monospace;font-size:.8rem}
-  .delta .bar{height:6px;background:var(--rule);position:relative;margin:6px 0 4px}
-  .delta .fill{position:absolute;left:0;top:0;bottom:0;background:var(--ink-soft)}
-  .delta.up .fill{background:var(--hit)}
-  .delta.down .fill{background:var(--miss)}
-  .delta small{color:var(--ink-soft)}
+  .log{border-left:1px solid var(--line);margin-top:28px}
+  .item{position:relative;padding:0 0 30px 26px}
+  .item::before{content:"";position:absolute;left:-4.5px;top:7px;width:8px;height:8px;border-radius:50%;background:var(--line2)}
+  .item.key::before{background:var(--accent)}
+  .item time{font:12px ui-monospace,monospace;color:var(--accent);letter-spacing:.04em}
+  .item h3{margin:5px 0 6px}
+  .item p{margin:0;color:var(--muted);font-size:15px;max-width:68ch}
+  .item .meta{font:12px ui-monospace,monospace;color:var(--dim);margin-top:8px}
 
-  footer{padding:48px 0 72px;border-top:1px solid var(--rule);color:var(--ink-soft);font-size:.9rem}
-  footer a{text-decoration:none;border-bottom:1px solid var(--rule)}
+  .phase{display:grid;grid-template-columns:96px 1fr auto;gap:20px;padding:22px;align-items:start;background:var(--panel);border:1px solid var(--line);border-radius:12px;margin-bottom:12px}
+  .phase-num{font:600 12px ui-monospace,monospace;color:var(--accent);letter-spacing:.08em;padding-top:3px}
+  .phase p{color:var(--muted);margin:0 0 10px;font-size:15px}
+  .phase ul{margin:0;padding-left:18px;color:var(--dim);font-size:14px}
+  .phase li{margin:5px 0}
+  .pill{font-size:12px;border:1px solid var(--line2);border-radius:999px;padding:4px 10px;color:var(--muted);white-space:nowrap}
+  .pill.now{border-color:var(--accent);color:var(--accent)}
 
-  @media (max-width:720px){
-    body{font-size:16px}
-    .row{grid-template-columns:minmax(0,1fr) 54px}
-    .path{font-size:.7rem}
-    .entry{grid-template-columns:1fr}
-    .pip .path{max-width:46vw;overflow:hidden;text-overflow:ellipsis}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:24px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px}
+  .card p{color:var(--muted);margin:0;font-size:15px}
+  .card .tag{display:inline-block;color:var(--accent);border-color:var(--line2);margin-bottom:12px}
+
+  .callout{border-left:3px solid var(--accent);background:rgba(119,230,195,.05);padding:16px 20px;margin:26px 0;border-radius:0 8px 8px 0;color:#b9c3d1}
+  .speculative{border-left-color:var(--warn);background:rgba(255,210,122,.05)}
+
+  footer{padding:44px 0 64px;color:var(--muted);font-size:14px}
+  footer a{color:var(--accent)}
+
+  @media(max-width:880px){
+    .status{grid-template-columns:1fr}
+    .col{border-right:0;border-bottom:1px solid var(--line)}
+    .col:last-child{border-bottom:0}
+    .stats,.grid,.findings{grid-template-columns:1fr 1fr}
+    .phase{grid-template-columns:1fr}
+    .pill{justify-self:start}
   }
-  @media (prefers-reduced-motion:reduce){
-    *{transition:none!important;animation:none!important}
+  @media(max-width:560px){
+    .stats,.grid,.findings{grid-template-columns:1fr}
+    .links{display:none}
+    .row{grid-template-columns:minmax(0,1fr) 52px}
+    .pip .path{max-width:44vw;overflow:hidden;text-overflow:ellipsis}
   }
 </style>
 </head>
 <body>
 
-<div class="wrap">
+<nav>
+  <div class="wrap inner">
+    <a class="brand" href="#top">AMA<span>DEUS</span></a>
+    <div class="links">
+      <a href="#now">Today</a><a href="#demo">Retrieval</a><a href="#log">Build log</a><a href="#next">What's next</a><a href="#thesis">Thesis</a>
+    </div>
+  </div>
+</nav>
 
-<header>
-  <h1>Ask a codebase a question.<br>Watch it decide what to read.</h1>
-  <p class="standfirst">AMADEUS indexes source files into a local vector store and answers questions using only the code it retrieves. Ollama for embeddings, SQLite for storage. Nothing leaves the machine.</p>
-  <div class="facts">
-    <div class="fact"><b>11,094</b><span>chunks indexed</span></div>
-    <div class="fact"><b>1,231</b><span>Go files</span></div>
-    <div class="fact"><b>16 min</b><span>full index, local GPU</span></div>
-    <div class="fact"><b>0</b><span>API calls</span></div>
+<main id="top">
+
+<header class="hero">
+  <div class="wrap">
+    <div class="eyebrow">Local-first codebase intelligence</div>
+    <h1>Ask a codebase<br>a question. Watch it<br><em>decide what to read.</em></h1>
+    <p class="lead">AMADEUS indexes a repository into a local vector store and answers questions using only the code it retrieves, with file and line citations. Ollama for embeddings, SQLite for storage, a local model for the answer. Nothing leaves the machine.</p>
+    <p class="lead">This page is a build log. Everything marked as working has been measured. Everything marked as planned is a hypothesis that still has to earn its way in.</p>
+    <div class="buttons">
+      <a class="btn primary" href="#demo">See a real query</a>
+      <a class="btn" href="#log">Build log</a>
+      <a class="btn" href="https://github.com/SalmaanShire365/AMADEUS" target="_blank" rel="noopener">GitHub</a>
+    </div>
+    <div class="stats">
+      <div class="stat"><strong>11,094</strong><small>chunks indexed</small></div>
+      <div class="stat"><strong>1,231</strong><small>Go files</small></div>
+      <div class="stat"><strong>16 min</strong><small>full index, local GPU</small></div>
+      <div class="stat"><strong>0</strong><small>API calls</small></div>
+    </div>
   </div>
 </header>
 
-<section>
-  <h2>Retrieval, as it actually ran</h2>
-  <p class="lede">Every number below came off a real run against an open-source Go codebase. Pick a question and the eight nearest chunks are placed by cosine distance — closer to the left means a better match. The cutoff line marks how much context gets handed to the model.</p>
-
-  <div class="asks" role="group" aria-label="Example questions"></div>
-
-  <div class="instrument">
-    <div class="statusline">
-      <span class="mono" id="st-left">select a question</span>
-      <span class="mono" id="st-right"></span>
+<section id="now">
+  <div class="wrap">
+    <div class="eyebrow">01 / Status</div>
+    <h2>Where the project actually is.</h2>
+    <p class="intro">A working retrieval pipeline with a measured baseline, one known failure mode, and a lot of unbuilt roadmap. Stated plainly so the rest of the page can be read honestly.</p>
+    <div class="status">
+      <div class="col on">
+        <h3><span class="bullet"></span>Working</h3>
+        <ul>
+          <li>Repository indexing with structure-aware chunking</li>
+          <li>Local embeddings via Ollama, vectors in SQLite</li>
+          <li>Incremental re-indexing by file hash</li>
+          <li>Grounded answers with file:line citations</li>
+          <li>Evaluation harness reporting recall@k and MRR</li>
+          <li>Tiered model routing, 1.5B through 8B</li>
+        </ul>
+      </div>
+      <div class="col part">
+        <h3><span class="bullet"></span>Partly working</h3>
+        <ul>
+          <li>Ranking — the right file is retrieved 94% of the time but ranked first only half the time</li>
+          <li>Multi-concept questions collapse to whichever term dominates</li>
+          <li>Relevance filtering controls context width, not topicality</li>
+          <li>The benchmark is eight questions; too small to detect small effects</li>
+        </ul>
+      </div>
+      <div class="col off">
+        <h3><span class="bullet"></span>Not started</h3>
+        <ul>
+          <li>Symbol and call-graph indexing</li>
+          <li>Repository knowledge graph</li>
+          <li>Iterative, agent-driven retrieval</li>
+          <li>Change-impact analysis</li>
+          <li>Patch generation and verification</li>
+        </ul>
+      </div>
     </div>
-    <div class="scale" id="scale">
-      <div class="cut" id="cut"></div>
-      <div id="rows"></div>
-      <div class="axis"><span id="ax-min"></span><span id="ax-max"></span></div>
-    </div>
-    <div class="verdict" id="verdict" hidden></div>
   </div>
 </section>
 
-<section>
-  <h2>What the evaluation settled</h2>
-  <p class="lede">A harness scores retrieval against questions whose correct answer file is already known, reporting recall@k and mean reciprocal rank. Four changes were tried against the baseline. Three of them made things worse.</p>
-  <div class="ledger">
+<section id="demo">
+  <div class="wrap">
+    <div class="eyebrow">02 / Retrieval</div>
+    <h2>How it decides what the model sees.</h2>
+    <p class="intro">Every number here came off a real run against an open-source Go codebase. Pick a question and the eight nearest chunks are placed by cosine distance — further left is a closer match. The cutoff line marks how much context reaches the model. One of these queries fails, and it's left in on purpose.</p>
 
-    <div class="entry">
-      <div>
-        <h3>Excluding test files from the index</h3>
-        <p>Test files were 44% of the corpus and were outranking the code they test. One question about heartbeat staleness returned eight test files and zero implementation.</p>
+    <div class="asks" role="group" aria-label="Example questions"></div>
+
+    <div class="instrument">
+      <div class="statusline">
+        <span id="st-left">select a question</span>
+        <span id="st-right"></span>
       </div>
-      <div class="delta up">
-        MRR 0.688 → 0.812
-        <div class="bar"><div class="fill" style="width:81%"></div></div>
-        <small>recall@5 0.750 → 0.938</small>
+      <div class="scale">
+        <div class="cut" id="cut"></div>
+        <div id="rows"></div>
+        <div class="axis"><span id="ax-min"></span><span id="ax-max"></span></div>
       </div>
+      <div class="verdict" id="verdict" hidden></div>
     </div>
+  </div>
+</section>
 
-    <div class="entry">
-      <div>
+<section id="results">
+  <div class="wrap">
+    <div class="eyebrow">03 / Evaluation</div>
+    <h2>Four changes tried. Three made it worse.</h2>
+    <p class="intro">The harness scores retrieval against questions whose correct answer file is already known. Current baseline: recall@1 0.500, recall@5 0.938, MRR 0.812. The interesting part is what didn't work.</p>
+    <div class="findings">
+      <div class="finding">
+        <span class="tag good">Worked</span>
+        <h3>Excluding test files from the index</h3>
+        <div class="num">MRR 0.688 → 0.812</div>
+        <div class="bar"><i style="width:81%"></i></div>
+        <p>Test files were 44% of the corpus and outranked the code they test. One question about heartbeat staleness returned eight test files and zero implementation. Recall@5 went 0.750 → 0.938.</p>
+      </div>
+      <div class="finding">
+        <span class="tag" style="color:var(--dim)">No effect</span>
         <h3>Aligning chunk boundaries to lines</h3>
+        <div class="num">MRR 0.812 → 0.812</div>
+        <div class="bar flat"><i style="width:81%"></i></div>
         <p>The chunker was slicing functions mid-token, which looked like the obvious culprit. After the fix, retrieval returned the same eight chunks at the same distances to four decimal places.</p>
       </div>
-      <div class="delta">
-        MRR 0.812 → 0.812
-        <div class="bar"><div class="fill" style="width:81%"></div></div>
-        <small>no measurable change</small>
+      <div class="finding">
+        <span class="tag miss">Worse</span>
+        <h3>Blending keyword overlap into ranking</h3>
+        <div class="num">MRR 0.812 → 0.729</div>
+        <div class="bar down"><i style="width:73%"></i></div>
+        <p>Swept from weight 0.02 to 0.30. Common tokens appear in nearly every file, so the boost was close to uniform noise.</p>
       </div>
-    </div>
-
-    <div class="entry">
-      <div>
-        <h3>Blending keyword overlap into the ranking</h3>
-        <p>Swept across weights from 0.02 to 0.30. Common tokens appear in nearly every file, so the boost was close to uniform noise.</p>
-      </div>
-      <div class="delta down">
-        MRR 0.812 → 0.729
-        <div class="bar"><div class="fill" style="width:73%"></div></div>
-        <small>degraded at every weight</small>
-      </div>
-    </div>
-
-    <div class="entry">
-      <div>
+      <div class="finding">
+        <span class="tag miss">Worse</span>
         <h3>Weighting those keywords by rarity</h3>
-        <p>If common tokens were the problem, rarity weighting should have fixed it. It didn't — term presence across a 1,500-character chunk carries little signal however it's weighted.</p>
-      </div>
-      <div class="delta down">
-        MRR 0.812 → 0.750
-        <div class="bar"><div class="fill" style="width:75%"></div></div>
-        <small>degraded at every weight</small>
+        <div class="num">MRR 0.812 → 0.750</div>
+        <div class="bar down"><i style="width:75%"></i></div>
+        <p>If common tokens were the problem, IDF weighting should have fixed it. It didn't. Term presence across a 1,500-character chunk carries little signal however it's weighted.</p>
       </div>
     </div>
-
+    <div class="callout">
+      <strong>What that suggests:</strong> code retrieval isn't text retrieval with more scoring terms bolted on. The gains came from corpus quality, not ranking cleverness — which is the argument for indexing software structure next rather than tuning heuristics further.
+    </div>
   </div>
 </section>
 
-<footer class="wrap" style="padding-left:0;padding-right:0">
-  Built by Salmaan Shire. Source, evaluation harness and full results at
-  <a href="https://github.com/SalmaanShire365/AMADEUS">github.com/SalmaanShire365/AMADEUS</a>.
-</footer>
+<section id="log">
+  <div class="wrap">
+    <div class="eyebrow">04 / Build log</div>
+    <h2>What actually happened, in order.</h2>
+    <p class="intro">Kept honestly, including the parts that were stalled or wrong.</p>
+    <div class="log">
 
-</div>
+      <div class="item">
+        <time>16 AUG 2026</time>
+        <h3>A tracking ticket, and then nothing</h3>
+        <p>Opened a work item for a retrieval evaluation harness and didn't touch it for eleven days. The pipeline existed on paper but had never been run end to end against a real index.</p>
+      </div>
+
+      <div class="item key">
+        <time>26 AUG 2026</time>
+        <h3>First working retrieval</h3>
+        <p>Got the pipeline running against its own source. Found that chunk boundaries were slicing functions mid-token and fixed them — which changed nothing at all. Swapping the prose-trained embedding model for a code-trained one was the change that actually moved rankings.</p>
+        <div class="meta">line-aligned chunking · jina-embeddings-v2-base-code · relative distance margin</div>
+      </div>
+
+      <div class="item">
+        <time>26 AUG 2026</time>
+        <h3>Absolute relevance thresholds don't work</h3>
+        <p>Distance bands shift per question, so a fixed cutoff admits everything on one query and nothing on the next. Worse, an entirely off-topic question scored better than the tail of a legitimate one. Replaced with a margin measured from the closest match, and accepted that topicality isn't filterable at this layer.</p>
+      </div>
+
+      <div class="item key">
+        <time>29 AUG 2026</time>
+        <h3>Indexed a real codebase</h3>
+        <p>1,231 Go files from an open-source project, 19,979 chunks, sixteen minutes on a local GPU. Retrieval that had looked mediocre against a four-file corpus turned out to be good — there simply hadn't been correct answers to find before.</p>
+        <div class="meta">first end-to-end run at scale</div>
+      </div>
+
+      <div class="item key">
+        <time>29 AUG 2026</time>
+        <h3>Evaluation harness and first baseline</h3>
+        <p>Eight questions with hand-verified answer files, scored on recall@k and MRR. First number: recall@1 0.438, MRR 0.688. The failures in the table matched the ones already spotted by eye, which is what made the harness trustworthy.</p>
+      </div>
+
+      <div class="item">
+        <time>29 AUG 2026</time>
+        <h3>Test files were 44% of the corpus</h3>
+        <p>Excluding them moved MRR to 0.812 and recall@5 to 0.938. Two reranking approaches tried afterwards both made things worse at every weight swept. Three experiments, one win — and knowing which was which took minutes instead of an afternoon.</p>
+        <div class="meta">recall@1 0.500 · recall@5 0.938 · MRR 0.812</div>
+      </div>
+
+      <div class="item key">
+        <time>6 SEP 2026</time>
+        <h3>Grounded answers, verified end to end</h3>
+        <p>Ran the full pipeline for the first time: question, retrieval, grounded prompt, local model. A 3B model ignored the citation instruction and invented a mechanism that wasn't in the retrieved code. An 8B model cited every claim and stayed inside its context. Grounded answers now default to the larger model.</p>
+        <div class="meta">generation was the bottleneck, not retrieval</div>
+      </div>
+
+      <div class="item">
+        <time>OPEN</time>
+        <h3>Multi-concept queries still collapse</h3>
+        <p>Ask how convoys are stored in the database and you get convoy display code with no storage layer — even though asking about the storage layer alone returns it cleanly. The embedding averages the two concepts instead of requiring both. Unsolved.</p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section id="next">
+  <div class="wrap">
+    <div class="eyebrow">05 / Roadmap</div>
+    <h2>Where this is meant to go.</h2>
+    <p class="intro">Each layer has to earn the next one with a measurable result. Everything past Phase 1 is a plan rather than a commitment — the point of writing it down is to have something specific to be wrong about.</p>
+
+    <div class="phase">
+      <div class="phase-num">PHASE 0</div>
+      <div>
+        <h3>Reliable local retrieval</h3>
+        <p>Indexing, chunking, filtering, and a reproducible benchmark. Mostly done; the benchmark needs to grow before smaller effects are detectable.</p>
+        <ul><li>Repository ingestion and incremental re-indexing</li><li>Local embeddings, SQLite vector storage</li><li>Recall@k and MRR evaluation harness</li></ul>
+      </div>
+      <span class="pill now">Current</span>
+    </div>
+
+    <div class="phase">
+      <div class="phase-num">PHASE 1</div>
+      <div>
+        <h3>Code-aware indexing</h3>
+        <p>Stop treating source as anonymous text. The evaluation already points this way: corpus structure mattered more than any ranking heuristic tried so far.</p>
+        <ul><li>Functions, types, interfaces, packages</li><li>Definitions and references</li><li>Imports and call relationships</li><li>Implementation ↔ test linkage</li></ul>
+      </div>
+      <span class="pill">Next</span>
+    </div>
+
+    <div class="phase">
+      <div class="phase-num">PHASE 2</div>
+      <div>
+        <h3>Repository knowledge graph</h3>
+        <p>Connect retrieved chunks into something navigable, so a question can be answered by traversal rather than nearest-neighbour alone.</p>
+        <ul><li>Call-graph traversal</li><li>Dependency and blast-radius analysis</li><li>Graph-aware reranking</li></ul>
+      </div>
+      <span class="pill">Planned</span>
+    </div>
+
+    <div class="phase">
+      <div class="phase-num">PHASE 3</div>
+      <div>
+        <h3>Agentic investigation</h3>
+        <p>Let the model decide what evidence it still needs instead of taking a single retrieval pass. This is also the most direct candidate fix for the multi-concept failure above.</p>
+        <ul><li>Query decomposition</li><li>Iterative retrieval loops</li><li>Confidence and source attribution</li></ul>
+      </div>
+      <span class="pill">Planned</span>
+    </div>
+
+    <div class="phase">
+      <div class="phase-num">PHASE 4</div>
+      <div>
+        <h3>Engineering workflows</h3>
+        <p>Move from explaining code to helping someone operate on it.</p>
+        <ul><li><code>ask</code> — understand a behaviour</li><li><code>investigate</code> — diagnose a problem</li><li><code>impact</code> — estimate blast radius</li><li>Reasoning over commit history</li></ul>
+      </div>
+      <span class="pill">Future</span>
+    </div>
+
+    <div class="phase">
+      <div class="phase-num">PHASE 5</div>
+      <div>
+        <h3>Verified code changes</h3>
+        <p>Propose changes, run the tests, iterate on failures — with the diff and its evidence always reviewable by a person.</p>
+        <ul><li>Patch generation</li><li>Test execution and failure-driven iteration</li><li>Diff and evidence review</li></ul>
+      </div>
+      <span class="pill">Long-term</span>
+    </div>
+
+    <div class="phase">
+      <div class="phase-num">PHASE 6</div>
+      <div>
+        <h3>Private deployment</h3>
+        <p>Package it for organisations that need codebase intelligence without sending source to an external service.</p>
+        <ul><li>On-prem and air-gapped options</li><li>IDE integration</li><li>Auditability and access controls</li></ul>
+      </div>
+      <span class="pill">Vision</span>
+    </div>
+  </div>
+</section>
+
+<section id="thesis">
+  <div class="wrap">
+    <div class="eyebrow">06 / Thesis</div>
+    <h2>Why retrieval is the interesting problem.</h2>
+    <p class="intro" style="max-width:72ch">Getting a model to generate code is largely solved. Getting it the <em>right</em> code — the right history, the right dependencies, enough evidence to explain why a system behaves as it does — is not. A large repository holds implementation, tests, configuration and years of decisions that will never fit in one prompt.</p>
+    <p class="intro" style="max-width:72ch">A function isn't a paragraph. It has callers, callees, interfaces, implementations, tests and a history. If those relationships can be represented, retrieval becomes a deliberate investigation instead of a nearest-neighbour lookup. That's the bet this project is testing.</p>
+
+    <div class="grid">
+      <article class="card"><span class="tag">Onboarding</span><h3>How does authentication work?</h3><p>Trace controllers, services, external systems and tests into a walkthrough that cites its sources.</p></article>
+      <article class="card"><span class="tag">Debugging</span><h3>Why is this timing out?</h3><p>Investigate the relevant path, inspect error handling, and build a hypothesis from repository evidence.</p></article>
+      <article class="card"><span class="tag">Change impact</span><h3>What breaks if I change this?</h3><p>Traverse callers, interfaces and tests to estimate the blast radius before the change is made.</p></article>
+      <article class="card"><span class="tag">Legacy</span><h3>What does this system do?</h3><p>Turn years of unfamiliar code into architecture maps and dependency relationships.</p></article>
+      <article class="card"><span class="tag">Security</span><h3>Where is authorization inconsistent?</h3><p>Find semantically related implementations and surface suspicious differences for human review.</p></article>
+      <article class="card"><span class="tag">History</span><h3>Why was this written this way?</h3><p>Connect current code to prior implementations and the commits that changed it.</p></article>
+    </div>
+
+    <div class="callout speculative">
+      <strong>Speculative, and worth labelling as such:</strong> if the local-first constraint holds up, the audience is engineering organisations that can't send source code to an external service — finance, healthcare, defence, regulated software. That's a hypothesis about a market, formed from a project that currently has an eight-question benchmark. It's written down to be tested, not because it's established.
+    </div>
+  </div>
+</section>
+
+<section id="principles" style="border-bottom:0">
+  <div class="wrap">
+    <div class="eyebrow">07 / Principles</div>
+    <h2>Rules the project holds itself to.</h2>
+    <div class="grid">
+      <article class="card"><h3>Local first</h3><p>Source code shouldn't need to leave the machine for core functionality.</p></article>
+      <article class="card"><h3>Evidence first</h3><p>Every answer points back to concrete files, symbols and lines.</p></article>
+      <article class="card"><h3>Measure everything</h3><p>Retrieval changes get evaluated, not assumed to be improvements. Three of the first four weren't.</p></article>
+      <article class="card"><h3>Structure over tricks</h3><p>Prefer understanding software relationships to stacking ranking heuristics.</p></article>
+      <article class="card"><h3>Human in control</h3><p>Investigation can be autonomous. Consequential changes stay reviewable.</p></article>
+      <article class="card"><h3>Earn the complexity</h3><p>Every new subsystem has to solve a demonstrated limitation of the last one.</p></article>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <strong>AMADEUS</strong> — an experiment by Salmaan Shire. Built around local retrieval, measurable evaluation, and the possibility of private codebase intelligence.
+    <br><a href="https://github.com/SalmaanShire365/AMADEUS" target="_blank" rel="noopener">Source and evaluation harness on GitHub</a>
+  </div>
+</footer>
 
 <script>
 const QUERIES = [
   {
-    q: "how does the deacon health check work",
-    margin: 0.06,
-    want: ["cmd/deacon.go"],
-    hits: [
-      ["cmd/deacon.go:865-912", 0.3148],
-      ["cmd/deacon.go:777-794", 0.3255],
-      ["cmd/deacon.go:938-987", 0.3457],
-      ["cmd/deacon.go:1089-1129", 0.3493],
-      ["cmd/deacon.go:1078-1088", 0.3556],
-      ["cmd/deacon.go:911-942", 0.3674],
-      ["cmd/health.go:88-101", 0.3744],
-      ["cmd/dog.go:939-996", 0.3766]
-    ],
-    ok: true,
-    note: "Six of the eight nearest chunks are the file that implements the check. The model gets the cooldown logic, the nudge, and the response loop.",
-    answer: [
-      ["If the agent is in cooldown, report the remaining time and exit.", "cmd/deacon.go:865-912"],
-      ["Send a HEALTH_CHECK message to the agent's tmux session.", "cmd/deacon.go:911-942"],
-      ["Wait for either a bead update or new session activity as a liveness signal.", "cmd/deacon.go:938-987"],
-      ["Record the response or failure, resetting the failure count on success.", "cmd/deacon.go:938-987"]
-    ]
+    q:"how does the deacon health check work", margin:0.06, want:["cmd/deacon.go"], ok:true,
+    hits:[["cmd/deacon.go:865-912",0.3148],["cmd/deacon.go:777-794",0.3255],["cmd/deacon.go:938-987",0.3457],["cmd/deacon.go:1089-1129",0.3493],["cmd/deacon.go:1078-1088",0.3556],["cmd/deacon.go:911-942",0.3674],["cmd/health.go:88-101",0.3744],["cmd/dog.go:939-996",0.3766]],
+    note:"Six of the eight nearest chunks are the file that implements the check. The model gets the cooldown logic, the nudge, and the response loop.",
+    answer:[["If the agent is in cooldown, report the remaining time and exit.","cmd/deacon.go:865-912"],["Send a HEALTH_CHECK message to the agent's session.","cmd/deacon.go:911-942"],["Wait for either a state update or new session activity as a liveness signal.","cmd/deacon.go:938-987"],["Record the response or failure, resetting the failure count on success.","cmd/deacon.go:938-987"]]
   },
   {
-    q: "dolt sql server connection",
-    margin: 0.06,
-    want: ["doltserver/doltserver.go", "cmd/dolt_dsn.go", "cmd/dolt.go"],
-    hits: [
-      ["doltserver/doltserver.go:4407-4431", 0.3799],
-      ["doltserver/doltserver.go:4431-4459", 0.3908],
-      ["doltserver/doltserver.go:2157-2180", 0.4083],
-      ["cmd/dolt_dsn.go:1-23", 0.4109],
-      ["cmd/dolt.go:896-943", 0.4111],
-      ["cmd/dolt.go:940-954", 0.4193],
-      ["doltserver/doltserver.go:454-481", 0.4227],
-      ["templates/polecat-CLAUDE.md:137-149", 0.4387]
-    ],
-    ok: true,
-    note: "A tight single-concept question. Every hit but the last is the storage layer or its callers.",
-    answer: null
+    q:"dolt sql server connection", margin:0.06, want:["doltserver/doltserver.go","cmd/dolt_dsn.go","cmd/dolt.go"], ok:true,
+    hits:[["doltserver/doltserver.go:4407-4431",0.3799],["doltserver/doltserver.go:4431-4459",0.3908],["doltserver/doltserver.go:2157-2180",0.4083],["cmd/dolt_dsn.go:1-23",0.4109],["cmd/dolt.go:896-943",0.4111],["cmd/dolt.go:940-954",0.4193],["doltserver/doltserver.go:454-481",0.4227],["templates/polecat-CLAUDE.md:137-149",0.4387]],
+    note:"A tight single-concept question. Every hit but the last is the storage layer or one of its callers.",
+    answer:null
   },
   {
-    q: "how are convoys stored in dolt",
-    margin: 0.06,
-    want: ["convoy/operations.go"],
-    hits: [
-      ["cmd/convoy.go:2174-2209", 0.4210],
-      ["cmd/convoy.go:2100-2131", 0.4225],
-      ["convoy/operations.go:94-113", 0.4381],
-      ["tui/feed/convoy.go:233-277", 0.4648],
-      ["deacon/feed_stranded.go:184-208", 0.4682],
-      ["cmd/convoy.go:2291-2298", 0.4744],
-      ["cmd/convoy.go:1564-1602", 0.4777],
-      ["cmd/convoy.go:2210-2268", 0.4815]
-    ],
-    ok: false,
-    note: "Two concepts, and the embedding averages them instead of requiring both. \u201cConvoy\u201d dominates; the storage layer barely appears, even though asking about Dolt alone returns it cleanly. Still an open problem.",
-    answer: null
+    q:"how are convoys stored in dolt", margin:0.06, want:["convoy/operations.go"], ok:false,
+    hits:[["cmd/convoy.go:2174-2209",0.4210],["cmd/convoy.go:2100-2131",0.4225],["convoy/operations.go:94-113",0.4381],["tui/feed/convoy.go:233-277",0.4648],["deacon/feed_stranded.go:184-208",0.4682],["cmd/convoy.go:2291-2298",0.4744],["cmd/convoy.go:1564-1602",0.4777],["cmd/convoy.go:2210-2268",0.4815]],
+    note:"Two concepts, and the embedding averages them instead of requiring both. \u201cConvoy\u201d dominates and the storage layer barely appears \u2014 even though asking about storage alone returns it cleanly. Still open.",
+    answer:null
   },
   {
-    q: "what does gt doctor check",
-    margin: 0.06,
-    want: ["cmd/doctor.go"],
-    hits: [
-      ["cmd/upgrade.go:107-144", 0.3551],
-      ["cmd/doctor.go:271-311", 0.3799],
-      ["cmd/doctor.go:308-325", 0.3883],
-      ["formula/mol-dog-doctor.formula.toml:46-104", 0.3935],
-      ["daemon/doctor_dog.go:149-159", 0.4073],
-      ["formula/mol-dog-doctor.formula.toml:151-213", 0.4086],
-      ["formula/mol-gastown-boot.formula.toml:152-169", 0.4096],
-      ["cmd/info.go:250-271", 0.4121]
-    ],
-    ok: true,
-    note: "The right file lands second rather than first, which is the shape of most misses here: the answer is retrieved, just not ranked top.",
-    answer: [
-      ["Registers checks for global state, stale binaries, and town Git state.", "cmd/upgrade.go:107-144"],
-      ["Adds settings, hooks, crew workspace and Dolt data health checks.", "cmd/doctor.go:271-311"],
-      ["Includes worktree validity and rig-specific checks.", "cmd/doctor.go:308-325"],
-      ["Dolt-specific steps: connectivity, latency, disk usage, orphan detection.", "formula/mol-dog-doctor.formula.toml:46-104"]
-    ]
+    q:"what does gt doctor check", margin:0.06, want:["cmd/doctor.go"], ok:true,
+    hits:[["cmd/upgrade.go:107-144",0.3551],["cmd/doctor.go:271-311",0.3799],["cmd/doctor.go:308-325",0.3883],["formula/mol-dog-doctor.toml:46-104",0.3935],["daemon/doctor_dog.go:149-159",0.4073],["formula/mol-dog-doctor.toml:151-213",0.4086],["formula/mol-gastown-boot.toml:152-169",0.4096],["cmd/info.go:250-271",0.4121]],
+    note:"The right file lands second rather than first, which is the shape of most misses here: the answer is retrieved, just not ranked top.",
+    answer:[["Registers checks for global state, stale binaries and repository state.","cmd/upgrade.go:107-144"],["Adds settings, hooks, workspace and data-health checks.","cmd/doctor.go:271-311"],["Includes worktree validity and per-repository checks.","cmd/doctor.go:308-325"],["Database steps: connectivity, latency, disk usage, orphan detection.","formula/mol-dog-doctor.toml:46-104"]]
   }
 ];
 
-const asksEl = document.querySelector(".asks");
-const rowsEl = document.getElementById("rows");
-const cutEl = document.getElementById("cut");
-const verdictEl = document.getElementById("verdict");
-const stL = document.getElementById("st-left");
-const stR = document.getElementById("st-right");
-const axMin = document.getElementById("ax-min");
-const axMax = document.getElementById("ax-max");
-const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-let timers = [];
+const asksEl=document.querySelector(".asks"),rowsEl=document.getElementById("rows"),
+cutEl=document.getElementById("cut"),verdictEl=document.getElementById("verdict"),
+stL=document.getElementById("st-left"),stR=document.getElementById("st-right"),
+axMin=document.getElementById("ax-min"),axMax=document.getElementById("ax-max");
+const reduced=window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+let timers=[];
 
-QUERIES.forEach((item, i) => {
-  const b = document.createElement("button");
-  b.className = "ask";
-  b.type = "button";
-  b.textContent = item.q;
-  b.setAttribute("aria-pressed", "false");
-  b.addEventListener("click", () => run(i));
+QUERIES.forEach((item,i)=>{
+  const b=document.createElement("button");
+  b.className="ask";b.type="button";b.textContent=item.q;
+  b.setAttribute("aria-pressed","false");
+  b.addEventListener("click",()=>run(i));
   asksEl.appendChild(b);
 });
 
-function clearTimers(){ timers.forEach(clearTimeout); timers = []; }
-function later(fn, ms){ timers.push(setTimeout(fn, reduced ? 0 : ms)); }
+function later(fn,ms){timers.push(setTimeout(fn,reduced?0:ms));}
 
 function run(index){
-  clearTimers();
-  const item = QUERIES[index];
+  timers.forEach(clearTimeout);timers=[];
+  const item=QUERIES[index];
+  document.querySelectorAll(".ask").forEach((b,i)=>b.setAttribute("aria-pressed",String(i===index)));
 
-  document.querySelectorAll(".ask").forEach((b, i) =>
-    b.setAttribute("aria-pressed", String(i === index)));
+  const dists=item.hits.map(h=>h[1]);
+  const best=Math.min(...dists),worst=Math.max(...dists);
+  const cutoff=best+item.margin;
+  const lo=best-0.012,hi=Math.max(worst,cutoff)+0.016;
+  const pos=d=>((d-lo)/(hi-lo))*100;
 
-  const dists = item.hits.map(h => h[1]);
-  const best = Math.min(...dists);
-  const worst = Math.max(...dists);
-  const cutoff = best + item.margin;
-  const lo = best - 0.012;
-  const hi = Math.max(worst, cutoff) + 0.016;
-  const pos = d => ((d - lo) / (hi - lo)) * 100;
-
-  axMin.textContent = lo.toFixed(3);
-  axMax.textContent = hi.toFixed(3);
+  axMin.textContent=lo.toFixed(3);axMax.textContent=hi.toFixed(3);
   cutEl.classList.remove("on");
-  verdictEl.hidden = true;
-  verdictEl.innerHTML = "";
-  rowsEl.innerHTML = "";
+  verdictEl.hidden=true;verdictEl.innerHTML="";rowsEl.innerHTML="";
+  stL.textContent="embedding question \u2192 768 dimensions";stR.textContent="";
 
-  stL.textContent = "embedding question \u2192 768 dimensions";
-  stR.textContent = "";
-
-  const rows = item.hits.map(([path, d]) => {
-    const row = document.createElement("div");
-    row.className = "row" + (item.want.some(w => path.startsWith(w)) ? " want" : "");
-    const track = document.createElement("div");
-    track.className = "track";
-    const pip = document.createElement("div");
-    pip.className = "pip";
-    pip.style.left = "0%";
-    pip.innerHTML = '<span class="dot"></span><span class="path"></span>';
-    pip.querySelector(".path").textContent = path;
+  const rows=item.hits.map(([path,d])=>{
+    const row=document.createElement("div");
+    row.className="row"+(item.want.some(w=>path.startsWith(w))?" want":"");
+    const track=document.createElement("div");track.className="track";
+    const pip=document.createElement("div");pip.className="pip";pip.style.left="0%";
+    pip.innerHTML='<span class="dot"></span><span class="path"></span>';
+    pip.querySelector(".path").textContent=path;
     track.appendChild(pip);
-    const dist = document.createElement("div");
-    dist.className = "dist";
-    dist.textContent = d.toFixed(4);
-    row.append(track, dist);
-    rowsEl.appendChild(row);
-    return { row, pip, d };
+    const dist=document.createElement("div");dist.className="dist";dist.textContent=d.toFixed(4);
+    row.append(track,dist);rowsEl.appendChild(row);
+    return {row,pip,d};
   });
 
-  later(() => {
-    stL.textContent = "nearest 8 of 11,094 chunks";
-    rows.forEach((r, i) => later(() => {
+  later(()=>{
+    stL.textContent="nearest 8 of 11,094 chunks";
+    rows.forEach((r,i)=>later(()=>{
       r.row.classList.add("in");
-      r.pip.style.left = Math.min(pos(r.d), 96) + "%";
-    }, i * 70));
-  }, 420);
+      r.pip.style.left=Math.min(pos(r.d),96)+"%";
+    },i*70));
+  },400);
 
-  later(() => {
-    cutEl.style.left = pos(cutoff) + "%";
-    cutEl.classList.add("on");
-    const kept = rows.filter(r => r.d <= cutoff).length;
-    rows.forEach(r => { if (r.d > cutoff) r.row.classList.add("cutoff-out"); });
-    stR.textContent = kept + " chunks passed the margin";
-  }, 1250);
+  later(()=>{
+    cutEl.style.left=pos(cutoff)+"%";cutEl.classList.add("on");
+    const kept=rows.filter(r=>r.d<=cutoff).length;
+    rows.forEach(r=>{if(r.d>cutoff)r.row.classList.add("out");});
+    stR.textContent=kept+" chunks passed to the model";
+  },1250);
 
-  later(() => {
-    const tag = item.ok
-      ? '<span class="tag good">answered</span>'
-      : '<span class="tag bad">missed</span>';
-    let html = "<p>" + tag + item.note + "</p>";
-    if (item.answer){
-      html += '<div class="answer"><ul>' + item.answer.map(([line, src]) =>
-        "<li>" + line + ' <span class="src">[' + src + "]</span></li>").join("") +
-        "</ul></div>";
+  later(()=>{
+    const tag=item.ok?'<span class="tag good">answered</span>':'<span class="tag miss">missed</span>';
+    let html="<p>"+tag+item.note+"</p>";
+    if(item.answer){
+      html+='<div class="answer"><ul>'+item.answer.map(([line,src])=>
+        "<li>"+line+' <span class="src">['+src+"]</span></li>").join("")+"</ul></div>";
     }
-    verdictEl.innerHTML = html;
-    verdictEl.hidden = false;
-  }, 1700);
+    verdictEl.innerHTML=html;verdictEl.hidden=false;
+  },1700);
 }
-
 run(0);
 </script>
 </body>

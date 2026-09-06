@@ -44,21 +44,23 @@ def retrieve_ranked_docs(question: str) -> list[str]:
     collapse to a ranked list of unique file_paths (best rank per file)."""
     qvec = rag.serialize_f32(rag.embed(question, is_query=True))
     rows = db.execute(
-        """SELECT c.file_path, v.distance
+        """SELECT c.file_path, c.content, v.distance
            FROM vec_chunks v JOIN chunks c ON c.id = v.chunk_id
            WHERE v.embedding MATCH ? AND k = ?
            ORDER BY v.distance""",
         (qvec, RETRIEVE_K),
     ).fetchall()
-
+    rows = rag.rerank(question, rows)
     ranked_docs = []
     seen = set()
-    for file_path, _dist in rows:
-        if file_path not in seen:
-            seen.add(file_path)
-            ranked_docs.append(file_path)
-    return ranked_docs
-
+    for file_path, _content, _dist in rows:
+        ranked_docs = []
+        seen = set()
+        for file_path, _content, _dist in rows:
+            if file_path not in seen:
+                seen.add(file_path)
+                ranked_docs.append(file_path)
+        return ranked_docs
 
 def recall_at_k(expected: list[str], ranked_docs: list[str], k: int) -> float:
     if not expected:

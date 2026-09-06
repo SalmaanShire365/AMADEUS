@@ -31,6 +31,7 @@ USE_TASK_PREFIX = False
 SKIP_TESTS = os.environ.get("AMADEUS_RAG_SKIP_TESTS","1") == "1"
 EMBED_DIM = 768
 TOP_K = int(os.environ.get("AMADEUS_RAG_TOP_K", "8"))
+LEXICAL_WEIGHT = float(os.environ.get("AMADEUS_RAG_LEXICAL_WEIGHT", "0.0"))
 # Relative cutoff: keep hits within DISTANCE_MARGIN of the closest match.
 # Absolute thresholds don't work here — distance bands shift per query
 # (0.69-0.78 on one, 0.49-0.59 on another), and an off-topic question
@@ -45,10 +46,6 @@ DATA_DIR = Path(os.environ.get("AMADEUS_RAG_DATA_DIR", ".amadeus")).resolve()
 DB_PATH = DATA_DIR / "index.db"
 META_PATH = DATA_DIR / "index_meta.json"
 
-IGNORE_DIRS = {
-    ".git", ".amadeus", "node_modules", "venv", ".venv", "__pycache__",
-    "dist", "build", "target", ".idea", ".vscode", ".cache", ".claude",
-}
 IGNORE_FILES = {
     "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
     "Cargo.lock", "poetry.lock", "uv.lock",
@@ -306,23 +303,34 @@ e.g. [ml/predict.py:34-80]. Never state a fact without a source tag.
 Question: {question}"""
 
 
+STOPWORDS = {"the", "a", "an", "how", "does", "do", "what", "is", "are",
+             "in", "to", "of", "when", "where", "with", "work", "works"}
+
+def lexical_score(query: str, file_path: str, content: str) -> float:
+    terms = set(re.findall(r"[a-z0-9]+", query.lower())) - STOPWORDS
+    if not terms:
+        return 0.0
+    hay = (file_path + " " + content).lower()
+    return sum(1 for t in terms if t in hay) / len(terms)
+
+def rerank(question: str, rows: list) -> list:
+    """Blend vector distance with query-term overlap.
+    rows must end with (..., content, distance)."""
+    return sorted(rows, key=lambda r: r[-1] - LEXICAL_WEIGHT * lexical_score(question, r[0], r[-2]))
+
 def cmd_query(question: str, debug: bool = False) -> None:
     if not DB_PATH.exists():
         sys.exit(f"error: no index found at {DB_PATH}. Run `index <dir>` first.")
     db = open_db()
     qvec = serialize_f32(embed(question, is_query=True))
-
-    rows = db.execute(
-        """SELECT c.file_path, c.start_line, c.end_line, c.content, v.distance
-           FROM vec_chunks v JOIN chunks c ON c.id = v.chunk_id
-           WHERE v.embedding MATCH ? AND k = ?
-           ORDER BY v.distance""",
-        (qvec, TOP_K),
-    ).fetchall()
-
+    
+    rows = rerank(question,rows)
+        
     if debug:
         for fp, s, e, _, dist in rows:
             print(f"  {dist:.4f}  {fp}:{s}-{e}", file=sys.stderr)
+    
+    rows = sorted(rows, key=lambda r: r[4] - LEXICAL_WEIGHT * lexical_score(question, r[0], r[3]))
 
     if not rows:
         print("NO_RELEVANT_CONTEXT")

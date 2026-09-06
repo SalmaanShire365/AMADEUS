@@ -7,3 +7,6 @@ state.json
 CLAUDE.md
 CLAUDE.local.md
 GEMINI.md
+venv/
+.amadeus/
+.agent_history.txt

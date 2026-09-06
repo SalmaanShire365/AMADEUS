@@ -28,6 +28,7 @@ from pathlib import Path
 OLLAMA_URL = os.environ.get("AMADEUS_OLLAMA_URL", "http://localhost:11434")
 EMBED_MODEL = "unclemusclez/jina-embeddings-v2-base-code"
 USE_TASK_PREFIX = False
+SKIP_TESTS = os.environ.get("AMADEUS_RAG_SKIP_TESTS","1") == "1"
 EMBED_DIM = 768
 TOP_K = int(os.environ.get("AMADEUS_RAG_TOP_K", "8"))
 # Relative cutoff: keep hits within DISTANCE_MARGIN of the closest match.
@@ -234,6 +235,10 @@ def cmd_index(root: str) -> None:
             continue
         if path.name in IGNORE_FILES or path.name.startswith(".agent"):
             continue
+        
+        if SKIP_TESTS and path.name.endswith(("_test.go", "_test.py", ".test.ts", ".spec.ts")):
+            continue
+
 
         rel = str(path.relative_to(root_path))
         seen.add(rel)

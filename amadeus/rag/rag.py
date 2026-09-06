@@ -330,12 +330,12 @@ def idf_score(db, query: str, file_path: str, content: str) -> float:
         score += math.log((total + 1) / (df + 1))
     return score
 
-
 def rerank(question: str, rows: list, db=None) -> list:
+    """Blend vector distance with IDF-weighted query-term overlap.
+    rows must end with (..., content, distance). Disabled at weight 0."""
     if not LEXICAL_WEIGHT or db is None:
         return rows
     return sorted(rows, key=lambda r: r[-1] - LEXICAL_WEIGHT * idf_score(db, question, r[0], r[-2]))
-
 
 
 
@@ -344,28 +344,43 @@ def cmd_query(question: str, debug: bool = False) -> None:
         sys.exit(f"error: no index found at {DB_PATH}. Run `index <dir>` first.")
     db = open_db()
     qvec = serialize_f32(embed(question, is_query=True))
-    
-    rows = rerank(question, rows, db) 
-        
+
+    rows = db.execute(
+        """SELECT c.file_path, c.start_line, c.end_line, c.content, v.distance
+           FROM vec_chunks v JOIN chunks c ON c.id = v.chunk_id
+           WHERE v.embedding MATCH ? AND k = ?
+           ORDER BY v.distance""",
+        (qvec, TOP_K),
+    ).fetchall()
+
     if debug:
         for fp, s, e, _, dist in rows:
             print(f"  {dist:.4f}  {fp}:{s}-{e}", file=sys.stderr)
-    
-    rows = sorted(rows, key=lambda r: r[4] - LEXICAL_WEIGHT * lexical_score(question, r[0], r[3]))
+
+    rows = rerank(question, rows, db)
 
     if not rows:
         print("NO_RELEVANT_CONTEXT")
         return
-    
+
     best = rows[0][4]
     rows = [r for r in rows if r[4] <= best + DISTANCE_MARGIN]
-   
 
     context = "\n\n".join(
         f"### {fp} (lines {s}-{e})\n```\n{content}\n```"
         for fp, s, e, content, _ in rows
     )
     print(PROMPT_TEMPLATE.format(context=context, question=question))
+
+
+
+
+
+
+
+
+
+
 
 
 # =========================

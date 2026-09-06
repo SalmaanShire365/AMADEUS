@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AMADEUS — local codebase retrieval</title>
+<meta name="description" content="A fully local RAG pipeline for codebases. Ask a question, see which chunks come back and how far away they are.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ground:#E7E8E3;
+    --panel:#F2F3EF;
+    --ink:#14181A;
+    --ink-soft:#5C6360;
+    --rule:#C7C9C2;
+    --signal:#1F3FD8;
+    --hit:#186B4F;
+    --miss:#9E3722;
+    --shadow:rgba(20,24,26,.07);
+    --step:1.6rem;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --ground:#141816;
+      --panel:#1C211E;
+      --ink:#E8EAE4;
+      --ink-soft:#9AA29D;
+      --rule:#333A36;
+      --signal:#7D95FF;
+      --hit:#4FBF95;
+      --miss:#E0755A;
+      --shadow:rgba(0,0,0,.35);
+    }
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0;
+    background:var(--ground);
+    color:var(--ink);
+    font-family:"Space Grotesk",system-ui,-apple-system,Segoe UI,sans-serif;
+    font-size:17px;
+    line-height:1.55;
+    -webkit-font-smoothing:antialiased;
+  }
+  .mono{font-family:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace}
+  .wrap{max-width:960px;margin:0 auto;padding:0 24px}
+  a{color:var(--signal)}
+  :focus-visible{outline:2px solid var(--signal);outline-offset:3px;border-radius:2px}
+
+  /* ---------- masthead ---------- */
+  header{padding:72px 0 40px}
+  h1{
+    font-size:clamp(2.6rem,7vw,4.4rem);
+    line-height:.95;
+    letter-spacing:-.035em;
+    font-weight:700;
+    margin:0 0 .35em;
+  }
+  .standfirst{
+    max-width:56ch;
+    font-size:1.15rem;
+    color:var(--ink-soft);
+    margin:0 0 28px;
+  }
+  .facts{
+    display:flex;flex-wrap:wrap;gap:0;
+    border-top:1px solid var(--rule);
+    border-bottom:1px solid var(--rule);
+  }
+  .fact{
+    flex:1 1 140px;padding:14px 18px 14px 0;
+  }
+  .fact b{display:block;font-size:1.45rem;letter-spacing:-.02em;font-weight:500}
+  .fact span{font-size:.82rem;color:var(--ink-soft)}
+
+  /* ---------- instrument ---------- */
+  section{padding:56px 0}
+  h2{font-size:1.5rem;letter-spacing:-.02em;margin:0 0 6px;font-weight:500}
+  .lede{color:var(--ink-soft);max-width:62ch;margin:0 0 26px}
+
+  .asks{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:26px}
+  .ask{
+    font:inherit;font-size:.92rem;
+    background:transparent;color:var(--ink);
+    border:1px solid var(--rule);
+    border-radius:999px;
+    padding:7px 15px;cursor:pointer;
+    transition:background .15s,border-color .15s,color .15s;
+  }
+  .ask:hover{border-color:var(--signal)}
+  .ask[aria-pressed="true"]{background:var(--ink);color:var(--ground);border-color:var(--ink)}
+
+  .instrument{
+    background:var(--panel);
+    border:1px solid var(--rule);
+    padding:22px 22px 10px;
+  }
+  .statusline{
+    display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;
+    font-size:.8rem;color:var(--ink-soft);
+    padding-bottom:14px;margin-bottom:16px;
+    border-bottom:1px solid var(--rule);
+  }
+
+  .scale{position:relative}
+  .cut{
+    position:absolute;top:-4px;bottom:26px;width:1px;
+    background:var(--signal);
+    opacity:0;transition:opacity .3s,left .5s cubic-bezier(.2,.7,.3,1);
+    z-index:2;
+  }
+  .cut::after{
+    content:"margin cutoff";
+    position:absolute;top:-2px;left:6px;
+    font-family:"IBM Plex Mono",monospace;
+    font-size:.68rem;color:var(--signal);white-space:nowrap;
+  }
+  .cut.on{opacity:1}
+
+  .row{
+    display:grid;
+    grid-template-columns:minmax(0,1fr) 62px;
+    align-items:center;
+    gap:12px;
+    padding:5px 0;
+    opacity:0;
+    transform:translateY(4px);
+  }
+  .row.in{opacity:1;transform:none;transition:opacity .32s ease,transform .32s ease}
+  .row.cutoff-out{opacity:.32}
+  .track{position:relative;height:22px}
+  .track::before{
+    content:"";position:absolute;left:0;right:0;top:50%;
+    border-top:1px dotted var(--rule);
+  }
+  .pip{
+    position:absolute;top:50%;transform:translate(-50%,-50%);
+    display:flex;align-items:center;gap:7px;
+    white-space:nowrap;
+    transition:left .5s cubic-bezier(.2,.7,.3,1);
+  }
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--ink-soft);flex:none}
+  .row.want .dot{background:var(--hit)}
+  .path{font-family:"IBM Plex Mono",monospace;font-size:.78rem}
+  .row.want .path{color:var(--hit);font-weight:500}
+  .dist{
+    font-family:"IBM Plex Mono",monospace;font-size:.78rem;
+    color:var(--ink-soft);text-align:right;
+  }
+  .axis{
+    display:flex;justify-content:space-between;
+    font-family:"IBM Plex Mono",monospace;font-size:.7rem;color:var(--ink-soft);
+    border-top:1px solid var(--rule);
+    padding:8px 0 14px;margin-top:6px;
+  }
+
+  .verdict{
+    border-top:1px solid var(--rule);
+    padding:18px 0 20px;
+  }
+  .verdict p{margin:0 0 12px}
+  .verdict .tag{
+    font-family:"IBM Plex Mono",monospace;font-size:.72rem;
+    border:1px solid currentColor;border-radius:2px;
+    padding:1px 6px;margin-right:9px;
+  }
+  .good{color:var(--hit)}
+  .bad{color:var(--miss)}
+  .answer{
+    background:var(--ground);
+    border-left:2px solid var(--signal);
+    padding:14px 16px;
+    font-size:.92rem;
+  }
+  .answer ul{margin:0;padding-left:18px}
+  .answer li{margin-bottom:8px}
+  .answer li:last-child{margin-bottom:0}
+  .src{font-family:"IBM Plex Mono",monospace;font-size:.75rem;color:var(--signal)}
+
+  /* ---------- ledger ---------- */
+  .ledger{border-top:1px solid var(--rule)}
+  .entry{
+    display:grid;grid-template-columns:1fr 210px;gap:20px;
+    padding:20px 0;border-bottom:1px solid var(--rule);
+    align-items:start;
+  }
+  .entry h3{margin:0 0 4px;font-size:1rem;font-weight:500}
+  .entry p{margin:0;color:var(--ink-soft);font-size:.92rem;max-width:52ch}
+  .delta{font-family:"IBM Plex Mono",monospace;font-size:.8rem}
+  .delta .bar{height:6px;background:var(--rule);position:relative;margin:6px 0 4px}
+  .delta .fill{position:absolute;left:0;top:0;bottom:0;background:var(--ink-soft)}
+  .delta.up .fill{background:var(--hit)}
+  .delta.down .fill{background:var(--miss)}
+  .delta small{color:var(--ink-soft)}
+
+  footer{padding:48px 0 72px;border-top:1px solid var(--rule);color:var(--ink-soft);font-size:.9rem}
+  footer a{text-decoration:none;border-bottom:1px solid var(--rule)}
+
+  @media (max-width:720px){
+    body{font-size:16px}
+    .row{grid-template-columns:minmax(0,1fr) 54px}
+    .path{font-size:.7rem}
+    .entry{grid-template-columns:1fr}
+    .pip .path{max-width:46vw;overflow:hidden;text-overflow:ellipsis}
+  }
+  @media (prefers-reduced-motion:reduce){
+    *{transition:none!important;animation:none!important}
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+<header>
+  <h1>Ask a codebase a question.<br>Watch it decide what to read.</h1>
+  <p class="standfirst">AMADEUS indexes source files into a local vector store and answers questions using only the code it retrieves. Ollama for embeddings, SQLite for storage. Nothing leaves the machine.</p>
+  <div class="facts">
+    <div class="fact"><b>11,094</b><span>chunks indexed</span></div>
+    <div class="fact"><b>1,231</b><span>Go files</span></div>
+    <div class="fact"><b>16 min</b><span>full index, local GPU</span></div>
+    <div class="fact"><b>0</b><span>API calls</span></div>
+  </div>
+</header>
+
+<section>
+  <h2>Retrieval, as it actually ran</h2>
+  <p class="lede">Every number below came off a real run against an open-source Go codebase. Pick a question and the eight nearest chunks are placed by cosine distance — closer to the left means a better match. The cutoff line marks how much context gets handed to the model.</p>
+
+  <div class="asks" role="group" aria-label="Example questions"></div>
+
+  <div class="instrument">
+    <div class="statusline">
+      <span class="mono" id="st-left">select a question</span>
+      <span class="mono" id="st-right"></span>
+    </div>
+    <div class="scale" id="scale">
+      <div class="cut" id="cut"></div>
+      <div id="rows"></div>
+      <div class="axis"><span id="ax-min"></span><span id="ax-max"></span></div>
+    </div>
+    <div class="verdict" id="verdict" hidden></div>
+  </div>
+</section>
+
+<section>
+  <h2>What the evaluation settled</h2>
+  <p class="lede">A harness scores retrieval against questions whose correct answer file is already known, reporting recall@k and mean reciprocal rank. Four changes were tried against the baseline. Three of them made things worse.</p>
+  <div class="ledger">
+
+    <div class="entry">
+      <div>
+        <h3>Excluding test files from the index</h3>
+        <p>Test files were 44% of the corpus and were outranking the code they test. One question about heartbeat staleness returned eight test files and zero implementation.</p>
+      </div>
+      <div class="delta up">
+        MRR 0.688 → 0.812
+        <div class="bar"><div class="fill" style="width:81%"></div></div>
+        <small>recall@5 0.750 → 0.938</small>
+      </div>
+    </div>
+
+    <div class="entry">
+      <div>
+        <h3>Aligning chunk boundaries to lines</h3>
+        <p>The chunker was slicing functions mid-token, which looked like the obvious culprit. After the fix, retrieval returned the same eight chunks at the same distances to four decimal places.</p>
+      </div>
+      <div class="delta">
+        MRR 0.812 → 0.812
+        <div class="bar"><div class="fill" style="width:81%"></div></div>
+        <small>no measurable change</small>
+      </div>
+    </div>
+
+    <div class="entry">
+      <div>
+        <h3>Blending keyword overlap into the ranking</h3>
+        <p>Swept across weights from 0.02 to 0.30. Common tokens appear in nearly every file, so the boost was close to uniform noise.</p>
+      </div>
+      <div class="delta down">
+        MRR 0.812 → 0.729
+        <div class="bar"><div class="fill" style="width:73%"></div></div>
+        <small>degraded at every weight</small>
+      </div>
+    </div>
+
+    <div class="entry">
+      <div>
+        <h3>Weighting those keywords by rarity</h3>
+        <p>If common tokens were the problem, rarity weighting should have fixed it. It didn't — term presence across a 1,500-character chunk carries little signal however it's weighted.</p>
+      </div>
+      <div class="delta down">
+        MRR 0.812 → 0.750
+        <div class="bar"><div class="fill" style="width:75%"></div></div>
+        <small>degraded at every weight</small>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<footer class="wrap" style="padding-left:0;padding-right:0">
+  Built by Salmaan Shire. Source, evaluation harness and full results at
+  <a href="https://github.com/SalmaanShire365/AMADEUS">github.com/SalmaanShire365/AMADEUS</a>.
+</footer>
+
+</div>
+
+<script>
+const QUERIES = [
+  {
+    q: "how does the deacon health check work",
+    margin: 0.06,
+    want: ["cmd/deacon.go"],
+    hits: [
+      ["cmd/deacon.go:865-912", 0.3148],
+      ["cmd/deacon.go:777-794", 0.3255],
+      ["cmd/deacon.go:938-987", 0.3457],
+      ["cmd/deacon.go:1089-1129", 0.3493],
+      ["cmd/deacon.go:1078-1088", 0.3556],
+      ["cmd/deacon.go:911-942", 0.3674],
+      ["cmd/health.go:88-101", 0.3744],
+      ["cmd/dog.go:939-996", 0.3766]
+    ],
+    ok: true,
+    note: "Six of the eight nearest chunks are the file that implements the check. The model gets the cooldown logic, the nudge, and the response loop.",
+    answer: [
+      ["If the agent is in cooldown, report the remaining time and exit.", "cmd/deacon.go:865-912"],
+      ["Send a HEALTH_CHECK message to the agent's tmux session.", "cmd/deacon.go:911-942"],
+      ["Wait for either a bead update or new session activity as a liveness signal.", "cmd/deacon.go:938-987"],
+      ["Record the response or failure, resetting the failure count on success.", "cmd/deacon.go:938-987"]
+    ]
+  },
+  {
+    q: "dolt sql server connection",
+    margin: 0.06,
+    want: ["doltserver/doltserver.go", "cmd/dolt_dsn.go", "cmd/dolt.go"],
+    hits: [
+      ["doltserver/doltserver.go:4407-4431", 0.3799],
+      ["doltserver/doltserver.go:4431-4459", 0.3908],
+      ["doltserver/doltserver.go:2157-2180", 0.4083],
+      ["cmd/dolt_dsn.go:1-23", 0.4109],
+      ["cmd/dolt.go:896-943", 0.4111],
+      ["cmd/dolt.go:940-954", 0.4193],
+      ["doltserver/doltserver.go:454-481", 0.4227],
+      ["templates/polecat-CLAUDE.md:137-149", 0.4387]
+    ],
+    ok: true,
+    note: "A tight single-concept question. Every hit but the last is the storage layer or its callers.",
+    answer: null
+  },
+  {
+    q: "how are convoys stored in dolt",
+    margin: 0.06,
+    want: ["convoy/operations.go"],
+    hits: [
+      ["cmd/convoy.go:2174-2209", 0.4210],
+      ["cmd/convoy.go:2100-2131", 0.4225],
+      ["convoy/operations.go:94-113", 0.4381],
+      ["tui/feed/convoy.go:233-277", 0.4648],
+      ["deacon/feed_stranded.go:184-208", 0.4682],
+      ["cmd/convoy.go:2291-2298", 0.4744],
+      ["cmd/convoy.go:1564-1602", 0.4777],
+      ["cmd/convoy.go:2210-2268", 0.4815]
+    ],
+    ok: false,
+    note: "Two concepts, and the embedding averages them instead of requiring both. \u201cConvoy\u201d dominates; the storage layer barely appears, even though asking about Dolt alone returns it cleanly. Still an open problem.",
+    answer: null
+  },
+  {
+    q: "what does gt doctor check",
+    margin: 0.06,
+    want: ["cmd/doctor.go"],
+    hits: [
+      ["cmd/upgrade.go:107-144", 0.3551],
+      ["cmd/doctor.go:271-311", 0.3799],
+      ["cmd/doctor.go:308-325", 0.3883],
+      ["formula/mol-dog-doctor.formula.toml:46-104", 0.3935],
+      ["daemon/doctor_dog.go:149-159", 0.4073],
+      ["formula/mol-dog-doctor.formula.toml:151-213", 0.4086],
+      ["formula/mol-gastown-boot.formula.toml:152-169", 0.4096],
+      ["cmd/info.go:250-271", 0.4121]
+    ],
+    ok: true,
+    note: "The right file lands second rather than first, which is the shape of most misses here: the answer is retrieved, just not ranked top.",
+    answer: [
+      ["Registers checks for global state, stale binaries, and town Git state.", "cmd/upgrade.go:107-144"],
+      ["Adds settings, hooks, crew workspace and Dolt data health checks.", "cmd/doctor.go:271-311"],
+      ["Includes worktree validity and rig-specific checks.", "cmd/doctor.go:308-325"],
+      ["Dolt-specific steps: connectivity, latency, disk usage, orphan detection.", "formula/mol-dog-doctor.formula.toml:46-104"]
+    ]
+  }
+];
+
+const asksEl = document.querySelector(".asks");
+const rowsEl = document.getElementById("rows");
+const cutEl = document.getElementById("cut");
+const verdictEl = document.getElementById("verdict");
+const stL = document.getElementById("st-left");
+const stR = document.getElementById("st-right");
+const axMin = document.getElementById("ax-min");
+const axMax = document.getElementById("ax-max");
+const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+let timers = [];
+
+QUERIES.forEach((item, i) => {
+  const b = document.createElement("button");
+  b.className = "ask";
+  b.type = "button";
+  b.textContent = item.q;
+  b.setAttribute("aria-pressed", "false");
+  b.addEventListener("click", () => run(i));
+  asksEl.appendChild(b);
+});
+
+function clearTimers(){ timers.forEach(clearTimeout); timers = []; }
+function later(fn, ms){ timers.push(setTimeout(fn, reduced ? 0 : ms)); }
+
+function run(index){
+  clearTimers();
+  const item = QUERIES[index];
+
+  document.querySelectorAll(".ask").forEach((b, i) =>
+    b.setAttribute("aria-pressed", String(i === index)));
+
+  const dists = item.hits.map(h => h[1]);
+  const best = Math.min(...dists);
+  const worst = Math.max(...dists);
+  const cutoff = best + item.margin;
+  const lo = best - 0.012;
+  const hi = Math.max(worst, cutoff) + 0.016;
+  const pos = d => ((d - lo) / (hi - lo)) * 100;
+
+  axMin.textContent = lo.toFixed(3);
+  axMax.textContent = hi.toFixed(3);
+  cutEl.classList.remove("on");
+  verdictEl.hidden = true;
+  verdictEl.innerHTML = "";
+  rowsEl.innerHTML = "";
+
+  stL.textContent = "embedding question \u2192 768 dimensions";
+  stR.textContent = "";
+
+  const rows = item.hits.map(([path, d]) => {
+    const row = document.createElement("div");
+    row.className = "row" + (item.want.some(w => path.startsWith(w)) ? " want" : "");
+    const track = document.createElement("div");
+    track.className = "track";
+    const pip = document.createElement("div");
+    pip.className = "pip";
+    pip.style.left = "0%";
+    pip.innerHTML = '<span class="dot"></span><span class="path"></span>';
+    pip.querySelector(".path").textContent = path;
+    track.appendChild(pip);
+    const dist = document.createElement("div");
+    dist.className = "dist";
+    dist.textContent = d.toFixed(4);
+    row.append(track, dist);
+    rowsEl.appendChild(row);
+    return { row, pip, d };
+  });
+
+  later(() => {
+    stL.textContent = "nearest 8 of 11,094 chunks";
+    rows.forEach((r, i) => later(() => {
+      r.row.classList.add("in");
+      r.pip.style.left = Math.min(pos(r.d), 96) + "%";
+    }, i * 70));
+  }, 420);
+
+  later(() => {
+    cutEl.style.left = pos(cutoff) + "%";
+    cutEl.classList.add("on");
+    const kept = rows.filter(r => r.d <= cutoff).length;
+    rows.forEach(r => { if (r.d > cutoff) r.row.classList.add("cutoff-out"); });
+    stR.textContent = kept + " chunks passed the margin";
+  }, 1250);
+
+  later(() => {
+    const tag = item.ok
+      ? '<span class="tag good">answered</span>'
+      : '<span class="tag bad">missed</span>';
+    let html = "<p>" + tag + item.note + "</p>";
+    if (item.answer){
+      html += '<div class="answer"><ul>' + item.answer.map(([line, src]) =>
+        "<li>" + line + ' <span class="src">[' + src + "]</span></li>").join("") +
+        "</ul></div>";
+    }
+    verdictEl.innerHTML = html;
+    verdictEl.hidden = false;
+  }, 1700);
+}
+
+run(0);
+</script>
+</body>
+</html>

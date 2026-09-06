@@ -50,7 +50,7 @@ def retrieve_ranked_docs(question: str) -> list[str]:
            ORDER BY v.distance""",
         (qvec, RETRIEVE_K),
     ).fetchall()
-    rows = rag.rerank(question, rows)
+    rows = rag.rerank(question, rows, db)  
     ranked_docs = []
     seen = set()
     for file_path, _content, _dist in rows:

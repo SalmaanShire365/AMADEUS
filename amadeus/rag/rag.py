@@ -13,6 +13,7 @@ vectors live in a single SQLite file via sqlite-vec.
 
 import argparse
 import hashlib
+import math
 import json
 import os
 import re
@@ -313,10 +314,30 @@ def lexical_score(query: str, file_path: str, content: str) -> float:
     hay = (file_path + " " + content).lower()
     return sum(1 for t in terms if t in hay) / len(terms)
 
-def rerank(question: str, rows: list) -> list:
-    """Blend vector distance with query-term overlap.
-    rows must end with (..., content, distance)."""
-    return sorted(rows, key=lambda r: r[-1] - LEXICAL_WEIGHT * lexical_score(question, r[0], r[-2]))
+
+
+def idf_score(db, query: str, file_path: str, content: str) -> float:
+    terms = set(re.findall(r"[a-z0-9]+", query.lower())) - STOPWORDS
+    if not terms:
+        return 0.0
+    hay = (file_path + " " + content).lower()
+    total = db.execute("SELECT count(*) FROM chunks").fetchone()[0]
+    score = 0.0
+    for t in terms:
+        if t not in hay:
+            continue
+        df = db.execute("SELECT count(*) FROM chunks WHERE content LIKE ?", (f"%{t}%",)).fetchone()[0]
+        score += math.log((total + 1) / (df + 1))
+    return score
+
+
+def rerank(question: str, rows: list, db=None) -> list:
+    if not LEXICAL_WEIGHT or db is None:
+        return rows
+    return sorted(rows, key=lambda r: r[-1] - LEXICAL_WEIGHT * idf_score(db, question, r[0], r[-2]))
+
+
+
 
 def cmd_query(question: str, debug: bool = False) -> None:
     if not DB_PATH.exists():
@@ -324,7 +345,7 @@ def cmd_query(question: str, debug: bool = False) -> None:
     db = open_db()
     qvec = serialize_f32(embed(question, is_query=True))
     
-    rows = rerank(question,rows)
+    rows = rerank(question, rows, db) 
         
     if debug:
         for fp, s, e, _, dist in rows:

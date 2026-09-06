@@ -15,7 +15,7 @@
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # =========================
-# MODELS (AMADEUS LAYER)
+# MODELS (AMADEUS LAY3b)
 # =========================
 MAIN_MODEL="${AMADEUS_MAIN_MODEL:-qwen2.5-coder:3b}"
 FAST_MODEL="${AMADEUS_FAST_MODEL:-qwen2.5-coder:1.5b}"
@@ -135,10 +135,10 @@ if [[ $# -gt 0 ]]; then
             rag_python index "${1:-.}"
             ;;
         rag)
-            MODEL=$MAIN_MODEL; LABEL="AMADEUS-RAG"; DEBUG=0
+            MODEL=$HEAVY_MODEL; LABEL="AMADEUS-RAG"; DEBUG=0
             while [[ "$1" == --* ]]; do
                 case "$1" in
-                    --heavy) MODEL=$HEAVY_MODEL; LABEL="AMADEUS-RAG-HEAVY" ;;
+                    --heavy) MODEL=$MAIN_MODEL; LABEL="AMADEUS-RAG-FAST" ;;
                     --debug) DEBUG=1 ;;
                     *) echo "unknown flag: $1"; exit 1 ;;
                 esac

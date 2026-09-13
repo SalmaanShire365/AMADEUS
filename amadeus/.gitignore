@@ -1,1 +1,4 @@
 .agent_history.txt
+
+# Rust build artifacts
+tui/target/

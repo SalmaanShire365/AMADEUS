@@ -25,8 +25,10 @@ HEAVY_MODEL="${AMADEUS_HEAVY_MODEL:-qwen3:8b}"
 # COMPONENT PATHS
 # =========================
 RAG_PY="$SCRIPT_DIR/rag/rag.py"
-RAG_VENV="$SCRIPT_DIR/rag/venv"
+RAG_VENV="$SCRIPT_DIR/venv"
 AGENT_PY="$SCRIPT_DIR/agent/agent.py"
+TUI_DIR="$SCRIPT_DIR/tui"
+TUI_BIN="$TUI_DIR/target/release/amadeus-tui"   
 
 # =========================
 # HISTORY + SESSION
@@ -51,6 +53,22 @@ rag_python() {
     else
         python3 "$RAG_PY" "$@"
     fi
+}
+
+run_tui() {
+    if [[ ! -x "$TUI_BIN" ]]; then
+        echo "AMADEUS TUI is not built."
+        echo "Building release binary..."
+        (
+            cd "$TUI_DIR" || exit 1
+            cargo build --release
+        ) || {
+            echo "Failed to build AMADEUS TUI."
+            exit 1
+        }
+    fi
+
+    exec "$TUI_BIN"
 }
 
 # run_rag <model> <label> <debug:0|1> <question>
@@ -108,19 +126,22 @@ Task: $TASK"
 
 usage() {
     cat << EOF
-AMADEUS — local AI coding agent
+    AMADEUS — local AI coding agent
 
 Usage:
-  amadeus                              interactive session
-  amadeus index [dir]                  build/refresh RAG index (default: .)
-  amadeus rag <question>               codebase-grounded answer
-  amadeus rag --heavy <question>       grounded answer with $HEAVY_MODEL
-  amadeus rag --debug <question>       retrieval only: distances, no model
-  amadeus ask <task>                   one-shot query ($MAIN_MODEL)
-  amadeus ask --fast <task>            one-shot with $FAST_MODEL
-  amadeus ask --heavy <task>           one-shot with $HEAVY_MODEL
-  amadeus codex <task>                 autonomous agent (writes files, runs code)
-  amadeus help                         this message
+
+  amadeus                         launch TUI
+  amadeus tui                     launch TUI
+  amadeus tui-dev                 launch TUI with cargo run
+  amadeus index [dir]             build/refresh RAG index
+  amadeus rag <question>          codebase-grounded answer
+  amadeus rag --heavy <question>  grounded answer with heavy model
+  amadeus rag --debug <question>  retrieval only
+  amadeus ask <task>              one-shot query
+  amadeus ask --fast <task>       one-shot with fast model
+  amadeus ask --heavy <task>       one-shot with heavy model
+  amadeus agent <task>            autonomous agent
+  amadeus help                    this message
 EOF
 }
 
@@ -131,6 +152,15 @@ if [[ $# -gt 0 ]]; then
     touch "$HISTORY_FILE"
     CMD="$1"; shift
     case "$CMD" in
+    
+        tui)
+            run_tui
+            ;;
+
+        tui-dev)
+            cd "$TUI_DIR" || exit 1
+            exec cargo run
+            ;;
         index)
             rag_python index "${1:-.}"
             ;;
@@ -138,7 +168,7 @@ if [[ $# -gt 0 ]]; then
             MODEL=$HEAVY_MODEL; LABEL="AMADEUS-RAG"; DEBUG=0
             while [[ "$1" == --* ]]; do
                 case "$1" in
-                    --heavy) MODEL=$MAIN_MODEL; LABEL="AMADEUS-RAG-FAST" ;;
+                    --heavy) MODEL=$HEAVY_MODEL; LABEL="AMADEUS-RAG-HEAVY" ;;
                     --debug) DEBUG=1 ;;
                     *) echo "unknown flag: $1"; exit 1 ;;
                 esac
@@ -152,7 +182,7 @@ if [[ $# -gt 0 ]]; then
             while [[ "$1" == --* ]]; do
                 case "$1" in
                     --fast)  MODEL=$FAST_MODEL;  LABEL="AMADEUS-FAST" ;;
-                    --heavy) MODEL=$HEAVY_MODEL; LABEL="AMADEUS-HEAVY" ;;
+                    --heavy) MODEL=$HEAVY_MODEL; LABEL="AMADEUS-RAG-HEAVY" ;;
                     *) echo "unknown flag: $1"; exit 1 ;;
                 esac
                 shift
@@ -179,113 +209,6 @@ fi
 # =========================
 # INTERACTIVE SESSION
 # =========================
-touch "$HISTORY_FILE"
 
-echo "=== AMADEUS ==="
-echo "Project: $(pwd)"
-echo "Session: $SESSION_ID"
-echo "Commands:"
-echo "  file <path>        → include file in next task"
-echo "  fast <task>        → quick model ($FAST_MODEL)"
-echo "  heavy <task>       → strong model ($HEAVY_MODEL)"
-echo "  index [dir]        → build/refresh RAG index (default: .)"
-echo "  rag <question>     → codebase-grounded answer"
-echo "  rag heavy <quest.> → grounded answer with $HEAVY_MODEL"
-echo "  rag debug <quest.> → retrieval only: distances, no model"
-echo "  codex <task>       → autonomous agent (writes files, runs code)"
-echo "  shell <cmd>        → run a shell command"
-echo "  history            → show session history"
-echo "  clear              → clear history file"
-echo "  exit               → quit"
-echo ""
 
-FILE_CONTEXT=""
-
-while true; do
-    read -p "Task> " TASK
-
-    if [[ "$TASK" == "exit" ]]; then
-        echo "Leaving timeline..."
-        break
-    fi
-
-    if [[ "$TASK" == "history" ]]; then
-        cat "$HISTORY_FILE"
-        continue
-    fi
-
-    if [[ "$TASK" == "clear" ]]; then
-        > "$HISTORY_FILE"
-        FILE_CONTEXT=""
-        echo "History cleared."
-        continue
-    fi
-
-    if [[ "$TASK" == shell* ]]; then
-        REAL_TASK="${TASK#shell }"
-        echo -e "\n--- SHELL EXECUTION ---"
-        eval "$REAL_TASK"
-        echo -e "----------------------\n"
-        echo -e "[SESSION:$SESSION_ID] User: shell $REAL_TASK\nAgent: [shell executed]\n" >> "$HISTORY_FILE"
-        continue
-    fi
-
-    if [[ "$TASK" == index* ]]; then
-        TARGET="${TASK#index}"
-        TARGET="${TARGET# }"
-        echo -e "\n--- INDEXING ${TARGET:-.} ---"
-        rag_python index "${TARGET:-.}"
-        echo -e "-----------------------------\n"
-        continue
-    fi
-
-    if [[ "$TASK" == rag* ]]; then
-        QUESTION="${TASK#rag }"
-        MODEL=$MAIN_MODEL; LABEL="AMADEUS-RAG"; DEBUG=0
-        if [[ "$QUESTION" == heavy* ]]; then
-            QUESTION="${QUESTION#heavy }"
-            MODEL=$HEAVY_MODEL; LABEL="AMADEUS-RAG-HEAVY"
-        elif [[ "$QUESTION" == debug* ]]; then
-            QUESTION="${QUESTION#debug }"
-            DEBUG=1
-        fi
-        run_rag "$MODEL" "$LABEL" "$DEBUG" "$QUESTION"
-        continue
-    fi
-
-    if [[ "$TASK" == codex* ]]; then
-        REAL_TASK="${TASK#codex }"
-        echo -e "\n--- LOCAL AGENT EXECUTION ---"
-        python3 "$AGENT_PY" "$REAL_TASK" --model "$MAIN_MODEL"
-        echo -e "-----------------------------\n"
-        echo -e "[SESSION:$SESSION_ID] User: codex $REAL_TASK\nAgent: [local-agent executed]\n" >> "$HISTORY_FILE"
-        continue
-    fi
-
-    if [[ "$TASK" == file* ]]; then
-        FILE_PATH="${TASK#file }"
-        if [[ -f "$FILE_PATH" ]]; then
-            FILE_CONTENT=$(cat "$FILE_PATH")
-            FILE_CONTEXT="${FILE_CONTEXT}\n\n### File: $FILE_PATH\n\`\`\`\n$FILE_CONTENT\n\`\`\`"
-            echo "Loaded: $FILE_PATH (will be included in next task)"
-        else
-            echo "File not found: $FILE_PATH"
-        fi
-        continue
-    fi
-
-    MODEL=$MAIN_MODEL
-    LABEL="AMADEUS"
-    if [[ "$TASK" == fast* ]]; then
-        MODEL=$FAST_MODEL
-        TASK="${TASK#fast }"
-        LABEL="AMADEUS-FAST"
-    elif [[ "$TASK" == heavy* ]]; then
-        MODEL=$HEAVY_MODEL
-        TASK="${TASK#heavy }"
-        LABEL="AMADEUS-HEAVY"
-    fi
-
-    run_model "$MODEL" "$LABEL" "$TASK" "$FILE_CONTEXT"
-    FILE_CONTEXT=""
-done
+run_tui

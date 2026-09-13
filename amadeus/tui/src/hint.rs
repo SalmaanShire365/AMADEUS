@@ -9,16 +9,56 @@ pub struct Cmd {
 }
 
 pub const COMMANDS: &[Cmd] = &[
-    Cmd { name: "/rag",     args: "<question>", help: "codebase-grounded answer" },
-    Cmd { name: "/ask",     args: "<task>",     help: "ask the model with no retrieval" },
-    Cmd { name: "/index",   args: "[dir]",      help: "build or refresh the RAG index" },
-    Cmd { name: "/file",    args: "<path>",     help: "stage a file into the next prompt" },
-    Cmd { name: "/shell",   args: "<cmd>",      help: "run a command, output into scrollback" },
-    Cmd { name: "/agent", args: "<task>", help: "autonomous coding agent" },
-    Cmd { name: "/model",   args: "",           help: "cycle fast / main / heavy" },
-    Cmd { name: "/history", args: "",           help: "show this session's history" },
-    Cmd { name: "/clear",   args: "",           help: "clear scrollback and history file" },
-    Cmd { name: "/quit",    args: "",           help: "exit" },
+    Cmd {
+        name: "/rag",
+        args: "<question>",
+        help: "codebase-grounded answer",
+    },
+    Cmd {
+        name: "/ask",
+        args: "<task>",
+        help: "ask the model with no retrieval",
+    },
+    Cmd {
+        name: "/index",
+        args: "[dir]",
+        help: "build or refresh the RAG index",
+    },
+    Cmd {
+        name: "/file",
+        args: "<path>",
+        help: "stage a file into the next prompt",
+    },
+    Cmd {
+        name: "/shell",
+        args: "<cmd>",
+        help: "run a command, output into scrollback",
+    },
+    Cmd {
+        name: "/agent",
+        args: "<task>",
+        help: "autonomous coding agent",
+    },
+    Cmd {
+        name: "/model",
+        args: "",
+        help: "cycle fast / main / heavy",
+    },
+    Cmd {
+        name: "/history",
+        args: "",
+        help: "show this session's history",
+    },
+    Cmd {
+        name: "/clear",
+        args: "",
+        help: "clear scrollback and history file",
+    },
+    Cmd {
+        name: "/quit",
+        args: "",
+        help: "exit",
+    },
 ];
 
 /// Keybinding reminders, mixed into the idle rotation alongside unused commands.
@@ -65,7 +105,10 @@ fn usage(c: &Cmd) -> String {
 
 /// Candidates for a partially typed command token.
 pub fn matches(token: &str) -> Vec<&'static Cmd> {
-    COMMANDS.iter().filter(|c| c.name.starts_with(token)).collect()
+    COMMANDS
+        .iter()
+        .filter(|c| c.name.starts_with(token))
+        .collect()
 }
 
 /// The whole hint bar, as a pure function of input state. No terminal, no
@@ -73,12 +116,7 @@ pub fn matches(token: &str) -> Vec<&'static Cmd> {
 ///
 /// `since_key` is time since the last keystroke; `idle_for` is time since the
 /// input buffer last became empty (used only to rotate idle hints).
-pub fn hint(
-    input: &str,
-    since_key: Duration,
-    idle_for: Duration,
-    used: &HashSet<String>,
-) -> Hint {
+pub fn hint(input: &str, since_key: Duration, idle_for: Duration, used: &HashSet<String>) -> Hint {
     if input.starts_with('/') {
         let token = input.split_whitespace().next().unwrap_or("/");
         // Still typing the command itself: offer completions.
@@ -146,7 +184,12 @@ mod tests {
 
     #[test]
     fn typing_arguments_shows_usage() {
-        let h = hint("/rag where is chunking", Duration::ZERO, Duration::ZERO, &none());
+        let h = hint(
+            "/rag where is chunking",
+            Duration::ZERO,
+            Duration::ZERO,
+            &none(),
+        );
         match h {
             Hint::Tip(t) => assert!(t.contains("grounded")),
             other => panic!("expected usage, got {other:?}"),
@@ -162,7 +205,12 @@ mod tests {
     #[test]
     fn hidden_while_actively_typing_prose() {
         assert_eq!(
-            hint("how does chunk", Duration::from_millis(120), Duration::ZERO, &none()),
+            hint(
+                "how does chunk",
+                Duration::from_millis(120),
+                Duration::ZERO,
+                &none()
+            ),
             Hint::Hidden
         );
     }
@@ -170,7 +218,12 @@ mod tests {
     #[test]
     fn prose_hint_returns_after_the_quiet_window() {
         assert!(matches!(
-            hint("how does chunk", Duration::from_secs(2), Duration::ZERO, &none()),
+            hint(
+                "how does chunk",
+                Duration::from_secs(2),
+                Duration::ZERO,
+                &none()
+            ),
             Hint::Tip(_)
         ));
     }

@@ -9,7 +9,12 @@ use crate::hint::Hint;
 
 fn kind_style(kind: Kind) -> (&'static str, Style) {
     match kind {
-        Kind::User => ("› ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Kind::User => (
+            "› ",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
         Kind::Agent => ("", Style::default()),
         Kind::System => ("· ", Style::default().fg(Color::DarkGray)),
         Kind::Source => ("  ", Style::default().fg(Color::Blue)),
@@ -33,7 +38,11 @@ fn wrap_entry(entry: &Entry, width: u16) -> Vec<Line<'static>> {
             continue;
         }
         for piece in textwrap::wrap(raw, inner) {
-            let gutter = if first { prefix.to_string() } else { pad.clone() };
+            let gutter = if first {
+                prefix.to_string()
+            } else {
+                pad.clone()
+            };
             first = false;
             out.push(Line::from(vec![
                 Span::styled(gutter, style),
@@ -124,16 +133,17 @@ fn draw_scrollback(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(Paragraph::new(visible), area);
 }
 
-fn draw_input(
-    f: &mut Frame,
-    app: &App,
-    area: Rect,
-    rows: &[String],
-    crow: usize,
-    ccol: usize,
-) {
-    let title = if app.busy.is_some() { " working " } else { " task " };
-    let border = if app.busy.is_some() { Color::DarkGray } else { Color::Cyan };
+fn draw_input(f: &mut Frame, app: &App, area: Rect, rows: &[String], crow: usize, ccol: usize) {
+    let title = if app.busy.is_some() {
+        " working "
+    } else {
+        " task "
+    };
+    let border = if app.busy.is_some() {
+        Color::DarkGray
+    } else {
+        Color::Cyan
+    };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border))
@@ -167,7 +177,9 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(
             left,
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::ITALIC),
         ))),
         cols[0],
     );
@@ -200,7 +212,9 @@ fn draw_menu(f: &mut Frame, cmds: &[&crate::hint::Cmd], input_area: Rect) {
             Line::from(vec![
                 Span::styled(
                     format!("{:<10}", c.name),
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(format!("{:<12}", c.args), Style::default().fg(Color::Gray)),
                 Span::styled(c.help.to_string(), Style::default().fg(Color::DarkGray)),

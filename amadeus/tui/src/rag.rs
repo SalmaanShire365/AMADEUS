@@ -2,31 +2,64 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::Sender;
+use std::thread;
 
 use crate::event::AppEvent;
 
-/// Mirrors `rag_python()` in amadeus.sh: prefer the venv interpreter, fall
-/// back to the system one.
-pub fn python(root: &Path) -> PathBuf {
-    let venv = root.join("rag/venv/bin/python3");
-    if venv.is_file() {
-        venv
+/// Return the AMADEUS installation directory.
+///
+/// `AMADEUS_HOME` is preferred because the TUI can be launched from any
+/// project directory.
+pub fn amadeus_home() -> PathBuf {
+    if let Ok(home) = std::env::var("AMADEUS_HOME") {
+        return PathBuf::from(home);
+    }
+
+    // When installed through ~/.local/bin/amadeus, AMADEUS_HOME should
+    // normally be set by amadeus.sh. This fallback is useful when running
+    // the TUI binary directly from the AMADEUS checkout.
+    if let Ok(exe) = std::env::current_exe() {
+        let mut path = exe;
+
+        // .../amadeus/tui/target/release/amadeus-tui
+        for _ in 0..4 {
+            if let Some(parent) = path.parent() {
+                path = parent.to_path_buf();
+
+                if path.join("rag/rag.py").is_file() && path.join("agent/agent.py").is_file() {
+                    return path;
+                }
+            }
+        }
+    }
+
+    PathBuf::from(".")
+}
+
+/// Python interpreter used by AMADEUS itself.
+///
+/// This is intentionally NOT rooted in the target project's venv.
+pub fn python() -> PathBuf {
+    let home = amadeus_home();
+    let venv_python = home.join("venv/bin/python3");
+
+    if venv_python.is_file() {
+        venv_python
     } else {
         PathBuf::from("python3")
     }
 }
 
-pub fn script(root: &Path) -> PathBuf {
-    root.join("rag/rag.py")
+/// AMADEUS's RAG script.
+pub fn script() -> PathBuf {
+    amadeus_home().join("rag/rag.py")
 }
 
 pub struct Retrieved {
-    /// Candidate chunks with their cosine distances, newest-first as printed.
-    /// These come from `--debug` on stderr, which prints the raw top-k BEFORE
-    /// reranking and before the DISTANCE_MARGIN cut — so some of these will
-    /// not actually be in the prompt.
+    /// Candidate chunks with their cosine distances.
     pub hits: Vec<String>,
-    /// The grounded prompt on stdout, ready to send to Ollama.
+
+    /// Grounded prompt ready to send to Ollama.
     pub prompt: String,
 }
 
@@ -36,21 +69,22 @@ pub enum QueryOutcome {
     Err(String),
 }
 
-/// Run `rag.py query <question> --debug`. One-shot, blocking; call it on a
-/// worker thread. Costs a Python start plus a sqlite open (~200ms) — the
-/// embedding model itself lives in Ollama, not here, so there is nothing
-/// warm to keep.
+/// Run `rag.py query <question> --debug`.
 pub fn query(root: &Path, question: &str) -> QueryOutcome {
-    let out = Command::new(python(root))
-        .arg(script(root))
+    let mut command = Command::new(python());
+
+    command
+        .arg(script())
         .arg("query")
         .arg(question)
         .arg("--debug")
-        .output();
+        .current_dir(root);
 
-    let out = match out {
+    let out = match command.output() {
         Ok(o) => o,
-        Err(e) => return QueryOutcome::Err(format!("cannot run rag.py: {e}")),
+        Err(e) => {
+            return QueryOutcome::Err(format!("cannot run rag.py: {e}"));
+        }
     };
 
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
@@ -62,98 +96,185 @@ pub fn query(root: &Path, question: &str) -> QueryOutcome {
         } else {
             stderr.trim().to_string()
         };
+
         return QueryOutcome::Err(msg);
     }
 
     if stdout.trim() == "NO_RELEVANT_CONTEXT" {
         return QueryOutcome::NoContext;
     }
+
     if stdout.trim().is_empty() {
         return QueryOutcome::Err("rag.py produced no prompt".into());
     }
 
     let hits = stderr
         .lines()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty())
-        .map(|l| l.to_string())
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
         .collect();
 
-    QueryOutcome::Ok(Retrieved { hits, prompt: stdout })
+    QueryOutcome::Ok(Retrieved {
+        hits,
+        prompt: stdout,
+    })
 }
 
-/// Run `rag.py index <dir>`, forwarding each line of progress as it appears.
+/// Run `rag.py index <dir>`.
 pub fn index(root: &Path, dir: &str, id: u64, tx: &Sender<AppEvent>) {
-    let child = Command::new(python(root))
-        .arg(script(root))
+    let mut command = Command::new(python());
+
+    command
+        .arg(script())
         .arg("index")
         .arg(dir)
+        .current_dir(root)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn();
+        .stderr(Stdio::piped());
 
-    let mut child = match child {
-        Ok(c) => c,
+    let mut child = match command.spawn() {
+        Ok(child) => child,
         Err(e) => {
-            let _ = tx.send(AppEvent::Failed { id, text: format!("cannot run rag.py: {e}") });
+            let _ = tx.send(AppEvent::Failed {
+                id,
+                text: format!("cannot run rag.py: {e}"),
+            });
             return;
         }
     };
 
-    if let Some(stdout) = child.stdout.take() {
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            if tx.send(AppEvent::Note { id, text: line }).is_err() {
-                return;
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+
+    let tx_stdout = tx.clone();
+
+    let stdout_thread = thread::spawn(move || {
+        if let Some(stdout) = stdout {
+            for line in BufReader::new(stdout).lines() {
+                match line {
+                    Ok(line) if !line.trim().is_empty() => {
+                        let _ = tx_stdout.send(AppEvent::Note {
+                            id,
+                            text: line,
+                        });
+                    }
+
+                    Ok(_) => {}
+
+                    Err(e) => {
+                        let _ = tx_stdout.send(AppEvent::Note {
+                            id,
+                            text: format!("index stdout error: {e}"),
+                        });
+                        break;
+                    }
+                }
             }
         }
-    }
+    });
 
-    let mut errs = String::new();
-    if let Some(stderr) = child.stderr.take() {
-        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-            errs.push_str(&line);
-            errs.push('\n');
+    let tx_stderr = tx.clone();
+
+    let stderr_thread = thread::spawn(move || {
+        if let Some(stderr) = stderr {
+            for line in BufReader::new(stderr).lines() {
+                match line {
+                    Ok(line) if !line.trim().is_empty() => {
+                        let _ = tx_stderr.send(AppEvent::Note {
+                            id,
+                            text: line,
+                        });
+                    }
+
+                    Ok(_) => {}
+
+                    Err(e) => {
+                        let _ = tx_stderr.send(AppEvent::Note {
+                            id,
+                            text: format!("index stderr error: {e}"),
+                        });
+                        break;
+                    }
+                }
+            }
         }
-    }
+    });
 
-    match child.wait() {
-        Ok(st) if st.success() => {
+    let status = child.wait();
+
+    let _ = stdout_thread.join();
+    let _ = stderr_thread.join();
+
+    match status {
+        Ok(status) if status.success() => {
             let _ = tx.send(AppEvent::Done { id });
         }
-        Ok(st) => {
-            let text = if errs.trim().is_empty() {
-                format!("index exited {st}")
-            } else {
-                errs.trim().to_string()
-            };
-            let _ = tx.send(AppEvent::Failed { id, text });
+
+        Ok(status) => {
+            let _ = tx.send(AppEvent::Failed {
+                id,
+                text: format!("index exited with {status}"),
+            });
         }
+
         Err(e) => {
-            let _ = tx.send(AppEvent::Failed { id, text: e.to_string() });
+            let _ = tx.send(AppEvent::Failed {
+                id,
+                text: format!("failed waiting for index: {e}"),
+            });
         }
     }
 }
 
-/// Run a shell command with output captured into scrollback rather than
-/// letting the child touch the terminal — we are in raw mode on the alternate
-/// screen, so anything interactive would fight the UI.
 pub fn shell(cmd: &str, id: u64, tx: &Sender<AppEvent>) {
-    let out = Command::new("sh").arg("-c").arg(cmd).output();
-    match out {
-        Ok(o) => {
-            let mut text = String::from_utf8_lossy(&o.stdout).to_string();
-            text.push_str(&String::from_utf8_lossy(&o.stderr));
-            if text.trim().is_empty() {
-                text = "(no output)".into();
-            }
-            let _ = tx.send(AppEvent::Note { id, text: text.trim_end().to_string() });
-            if !o.status.success() {
-                let _ = tx.send(AppEvent::Note { id, text: format!("exit {}", o.status) });
-            }
-            let _ = tx.send(AppEvent::Done { id });
-        }
+    let output = match Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .output()
+    {
+        Ok(output) => output,
         Err(e) => {
-            let _ = tx.send(AppEvent::Failed { id, text: e.to_string() });
+            let _ = tx.send(AppEvent::Failed {
+                id,
+                text: format!("shell error: {e}"),
+            });
+            return;
         }
+    };
+
+    if !output.stdout.is_empty() {
+        let text = String::from_utf8_lossy(&output.stdout);
+
+        for line in text.lines() {
+            if !line.trim().is_empty() {
+                let _ = tx.send(AppEvent::Note {
+                    id,
+                    text: line.to_string(),
+                });
+            }
+        }
+    }
+
+    if !output.stderr.is_empty() {
+        let text = String::from_utf8_lossy(&output.stderr);
+
+        for line in text.lines() {
+            if !line.trim().is_empty() {
+                let _ = tx.send(AppEvent::Note {
+                    id,
+                    text: line.to_string(),
+                });
+            }
+        }
+    }
+
+    if output.status.success() {
+        let _ = tx.send(AppEvent::Done { id });
+    } else {
+        let _ = tx.send(AppEvent::Failed {
+            id,
+            text: format!("shell exited with {}", output.status),
+        });
     }
 }

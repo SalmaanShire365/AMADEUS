@@ -282,7 +282,7 @@ def cmd_index(root: str) -> None:
             db.execute(
                 f"DELETE FROM vec_chunks WHERE chunk_id IN ({qmarks})", old_ids)
         del meta["files"][rel]
-        print(f"removed: {rel}")
+        
 
     db.commit()
     save_meta(meta)

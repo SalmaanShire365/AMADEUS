@@ -55,7 +55,10 @@ pub fn generate(
         // Cancellation is checked between lines. A request that is stalled
         // with no bytes arriving will not notice until the next token or EOF.
         if cancel.load(Ordering::Relaxed) {
-            let _ = tx.send(AppEvent::Note { id, text: "[cancelled]".into() });
+            let _ = tx.send(AppEvent::Note {
+                id,
+                text: "[cancelled]".into(),
+            });
             break;
         }
         line.clear();
@@ -63,7 +66,10 @@ pub fn generate(
             Ok(0) => break,
             Ok(_) => {}
             Err(e) => {
-                let _ = tx.send(AppEvent::Failed { id, text: format!("stream broke: {e}") });
+                let _ = tx.send(AppEvent::Failed {
+                    id,
+                    text: format!("stream broke: {e}"),
+                });
                 return;
             }
         }
@@ -76,12 +82,21 @@ pub fn generate(
             Err(_) => continue,
         };
         if let Some(err) = v.get("error").and_then(|e| e.as_str()) {
-            let _ = tx.send(AppEvent::Failed { id, text: format!("ollama: {err}") });
+            let _ = tx.send(AppEvent::Failed {
+                id,
+                text: format!("ollama: {err}"),
+            });
             return;
         }
         if let Some(delta) = v.get("response").and_then(|r| r.as_str()) {
             if !delta.is_empty() {
-                if tx.send(AppEvent::Token { id, delta: delta.to_string() }).is_err() {
+                if tx
+                    .send(AppEvent::Token {
+                        id,
+                        delta: delta.to_string(),
+                    })
+                    .is_err()
+                {
                     return; // UI is gone
                 }
             }
@@ -122,7 +137,14 @@ mod tests {
     fn collect(port: u16) -> (String, Vec<String>, bool) {
         let (tx, rx) = mpsc::channel();
         let cancel = AtomicBool::new(false);
-        generate(&format!("http://127.0.0.1:{port}"), "m", "p", 7, &tx, &cancel);
+        generate(
+            &format!("http://127.0.0.1:{port}"),
+            "m",
+            "p",
+            7,
+            &tx,
+            &cancel,
+        );
         drop(tx);
         let (mut text, mut errs, mut done) = (String::new(), Vec::new(), false);
         while let Ok(ev) = rx.try_recv() {

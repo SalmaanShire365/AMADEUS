@@ -6,3 +6,20 @@
 {"query": "how are rigs registered", "expected": ["cmd/rig.go", "rig/manager.go"]}
 {"query": "how does sling dispatch work with tmux sessions", "expected": ["cmd/sling_helpers.go", "tmux/tmux.go"]}
 {"query": "what does gt doctor check", "expected": ["cmd/doctor.go"]}
+{"query": "how are nudges queued without interrupting the agent", "expected": ["nudge/queue.go"]}
+{"query": "how do non-claude runtimes receive queued nudges", "expected": ["nudge/poller.go"]}
+{"query": "how does emergency stop freeze all agents", "expected": ["estop/estop.go", "cmd/estop.go"]}
+{"query": "how are old wisps purged from the database", "expected": ["reaper/reaper.go"]}
+{"query": "how are polecat names allocated", "expected": ["polecat/namepool.go"]}
+{"query": "how does the refinery batch merge requests and bisect failures", "expected": ["refinery/batch.go"]}
+{"query": "how are merge requests prioritized", "expected": ["refinery/score.go"]}
+{"query": "how are rate limited sessions detected", "expected": ["quota/scan.go"]}
+{"query": "how does gt escalate send an escalation", "expected": ["cmd/escalate_impl.go"]}
+{"query": "how does an agent hand off to a fresh session", "expected": ["cmd/handoff.go"]}
+{"query": "how does a polecat recover state after its session crashes", "expected": ["checkpoint/checkpoint.go"]}
+{"query": "how does gt prevent two agents claiming the same identity", "expected": ["lock/lock.go"]}
+{"query": "how is a formula toml file parsed and validated", "expected": ["formula/parser.go"]}
+{"query": "how does the daemon limit restarts of crashing agents", "expected": ["daemon/restart_tracker.go"]}
+{"query": "how does mail delivery fall back to a queued nudge", "expected": ["mail/router.go", "nudge/queue.go"]}
+{"query": "how does gt done create a merge request for the refinery", "expected": ["cmd/done.go", "refinery/engineer.go"]}
+{"query": "does the daemon skip restarting agents during an emergency stop", "expected": ["daemon/daemon.go", "estop/estop.go"]}

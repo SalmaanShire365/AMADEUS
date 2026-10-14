@@ -56,13 +56,13 @@ Override the index with `make eval DATA=/path/to/index-dir`.
 serve `unclemusclez/jina-embeddings-v2-base-code`; an HTTP 404 from Ollama means that model is
 missing or unreadable.
 
-Gas Town Go corpus (`~/rag-corpus/gastown/internal`, tests skipped, 11,094 chunks), 8 fixtures:
+Gas Town Go corpus (`~/rag-corpus/gastown/internal`, tests skipped, 11,104 chunks), 25 fixtures:
 
 | recall@1 | recall@3 | recall@5 | recall@10 | MRR |
 |---|---|---|---|---|
-| 0.500 | 0.812 | 0.938 | 0.938 | 0.812 |
+| 0.380 | 0.640 | 0.720 | 0.800 | 0.592 |
 
-Reproduced 2026-10-01 from a fresh index build.
+Measured 2026-10-14 when the fixtures grew 8 → 25. The old 8-query baseline was 0.500 / 0.812 / 0.938 / 0.938 / 0.812.
 
 ## Rules
 
@@ -95,14 +95,12 @@ Reproduced 2026-10-01 from a fresh index build.
 
 ## Open problems
 
-1. **Fixtures: 8 → 20+, plus 3–5 negative queries** (`amadeus-c12`). Eight queries is too few to
-   trust small deltas.
-2. **`DEF_RE` misses Go `type`/`struct`/`interface` declarations** (`amadeus-th1`), so those land
+1. **`DEF_RE` misses Go `type`/`struct`/`interface` declarations** (`amadeus-th1`), so those land
    inside neighbouring chunks.
-3. **Multi-concept dilution** (`hq-lgi`). "how are convoys stored in dolt" retrieves convoy code but
+2. **Multi-concept dilution** (`hq-lgi`). "how are convoys stored in dolt" retrieves convoy code but
    not the storage layer; the embedding averages concepts. Already failed: lexical rerank, IDF
    weighting. Candidates: query decomposition, model reranker.
-4. **Standalone CLI** (`amadeus-wyd`). `amadeus.sh` resolves its home from the script path, the TUI
+3. **Standalone CLI** (`amadeus-wyd`). `amadeus.sh` resolves its home from the script path, the TUI
    from `AMADEUS_HOME`; pick one rule for both.
-5. **README is missing the TUI** (`amadeus-7ba`), still says `rag/venv` (the code uses
+4. **README is missing the TUI** (`amadeus-7ba`), still says `rag/venv` (the code uses
    `amadeus/venv`), and doesn't mention `qwen2.5-coder:1.5b` isn't pulled by default here.

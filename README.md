@@ -92,11 +92,13 @@ Design decisions worth noting:
 
 `rag/eval/run_eval.py` scores retrieval against `rag/eval/fixtures.jsonl` — question → expected-file pairs — and reports recall@k and MRR at the file level. It calls the same `embed()` and rerank path the CLI uses, so it measures what actually ships.
 
-Current baseline, over the Gas Town Go codebase (1,231 files, 11,094 chunks after test exclusion):
+Current baseline, 25 queries over the Gas Town Go codebase (1,231 files, 11,104 chunks after test exclusion):
 
 | recall@1 | recall@3 | recall@5 | recall@10 | MRR |
 |---|---|---|---|---|
-| 0.500 | 0.812 | 0.938 | 0.938 | 0.812 |
+| 0.380 | 0.640 | 0.720 | 0.800 | 0.592 |
+
+Twenty-five queries is still a small set; treat differences of a few hundredths as noise. Four negative queries (no answer in the corpus) sit in `rag/eval/fixtures_negative.jsonl` and aren't scored yet.
 
 What the harness has settled so far:
 
@@ -104,6 +106,7 @@ What the harness has settled so far:
 - **Lexical reranking doesn't help.** Blending term-overlap into the ranking degraded results at every weight from 0.02 to 0.30 (recall@1 0.500 → 0.438, MRR 0.812 → 0.729).
 - **Neither does IDF weighting.** The hypothesis was that common tokens were drowning rare ones. Rarity weighting was swept from 0.005 to 0.05 and degraded results just as consistently. Term presence at 1500-character chunk granularity carries little relevance signal regardless of how it's weighted. `AMADEUS_RAG_LEXICAL_WEIGHT` defaults to `0.0`; the `rerank()` hook stays as the measured entry point for future attempts.
 - **Capping chunk length is retrieval-neutral.** Lines longer than 1,500 characters are now hard-split, so no chunk exceeds the cap (the largest chunk went from 6,031 to 1,500 characters; 11,094 → 11,104 chunks). Every metric and every per-query score is unchanged. The cap is a robustness fix: Ollama ≥0.32 rejects oversized inputs with HTTP 500 instead of truncating, and one 82 KB single-line JSON file used to abort a whole indexing run. Indexing now also commits per file, so a failure loses only the file in progress.
+- **The first eight fixtures were optimistic.** Growing the set from 8 to 25 queries, with the index unchanged, dropped MRR from 0.812 to 0.592 and recall@5 from 0.938 to 0.720. Three of the new queries miss entirely at k=10: MR priority scoring (`refinery/score.go`), the identity lock (`lock/lock.go`) and the nudge poller for non-Claude runtimes (`nudge/poller.go`). In each case retrieval returns neighbouring files that use the concept rather than the one that implements it. The earlier numbers in this list were measured on the 8-query set.
 - **Multi-concept queries collapse to the dominant term.** "How are convoys stored in dolt" returns convoy display code and no storage layer, while "dolt sql server connection" alone returns the storage layer cleanly. Both concepts are indexed; the embedding averages rather than conjoins. Still open — candidates are query decomposition or a model-based reranker.
 
 The negative results are the point. Three of the four changes tried didn't work, and measuring took minutes instead of an afternoon of arguing with the output.
@@ -184,7 +187,7 @@ AMADEUS_RAG_LEXICAL_WEIGHT=0.0 \
 - [x] Bundle the execution agent into the repo
 - [x] Retrieval evaluation harness: question→expected-file pairs, recall@k and MRR
 - [ ] Fix multi-concept query dilution (decomposition or model-based reranking)
-- [ ] Grow the fixture set past 20 pairs so smaller effects are detectable
+- [x] Grow the fixture set past 20 pairs so smaller effects are detectable
 - [ ] Semantic session memory: embed history and retrieve relevant past exchanges instead of the blind last-40-lines window
 - [ ] Streaming responses instead of waiting for full completion
 - [ ] Configurable system prompt per project

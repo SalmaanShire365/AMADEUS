@@ -150,8 +150,15 @@ def save_meta(meta: dict) -> None:
 # CHUNKING
 # =========================
 def split_fixed(text: str, start_line: int) -> list[tuple[int, int, str]]:
-    """Fallback: line-aligned chunks with line overlap. Returns (start, end, text)."""
-    lines = text.splitlines(keepends=True)
+    """Fallback: line-aligned chunks with line overlap. Returns (start, end, text).
+    Lines longer than MAX_CHUNK_CHARS are hard-split so no chunk exceeds it
+    (a minified one-line file would otherwise become one huge chunk, which
+    Ollama rejects with HTTP 500 instead of truncating)."""
+    lines, linenos = [], []
+    for n, line in enumerate(text.splitlines(keepends=True)):
+        for k in range(0, len(line), MAX_CHUNK_CHARS):
+            lines.append(line[k:k + MAX_CHUNK_CHARS])
+            linenos.append(start_line + n)
     if not lines:
         return []
     out = []
@@ -164,7 +171,7 @@ def split_fixed(text: str, start_line: int) -> list[tuple[int, int, str]]:
             j += 1
         piece = "".join(piece_lines)
         if piece.strip():
-            out.append((start_line + i, start_line + j - 1, piece))
+            out.append((linenos[i], linenos[j - 1], piece))
         if j >= len(lines):
             break
         # step back a few lines for overlap, but always advance
@@ -270,6 +277,10 @@ def cmd_index(root: str) -> None:
             )
             added += 1
         meta["files"][rel] = file_hash
+        # Commit per file so a failure mid-run (e.g. an embed error) loses
+        # only the file in progress, not everything indexed so far.
+        db.commit()
+        save_meta(meta)
         print(f"indexed: {rel}")
 
     # Purge files that were deleted from disk.

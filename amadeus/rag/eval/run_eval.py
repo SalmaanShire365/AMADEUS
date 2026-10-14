@@ -50,17 +50,15 @@ def retrieve_ranked_docs(question: str) -> list[str]:
            ORDER BY v.distance""",
         (qvec, RETRIEVE_K),
     ).fetchall()
-    rows = rag.rerank(question, rows, db)  
+    rows = rag.rerank(question, rows, db)
     ranked_docs = []
     seen = set()
     for file_path, _content, _dist in rows:
-        ranked_docs = []
-        seen = set()
-        for file_path, _content, _dist in rows:
-            if file_path not in seen:
-                seen.add(file_path)
-                ranked_docs.append(file_path)
-        return ranked_docs
+        if file_path not in seen:
+            seen.add(file_path)
+            ranked_docs.append(file_path)
+    return ranked_docs
+
 
 def recall_at_k(expected: list[str], ranked_docs: list[str], k: int) -> float:
     if not expected:

@@ -1,12 +1,17 @@
 .runtime/
-.claude/
 .opencode/
 .logs/
 __pycache__/
 state.json
-CLAUDE.md
 CLAUDE.local.md
 GEMINI.md
 venv/
 .amadeus/
 .agent_history.txt
+
+# editor swap files
+*.swp
+*.swo
+
+# per-machine Claude Code overrides
+.claude/settings.local.json

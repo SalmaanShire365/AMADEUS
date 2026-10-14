@@ -65,7 +65,7 @@ fn ensure_wrapped(app: &mut App, width: u16) -> Vec<Line<'static>> {
         app.wrap_width = width;
         app.invalidate_wrap();
     }
-    while app.entries.len() > 0 && app.stable_upto + 1 < app.entries.len() {
+    while !app.entries.is_empty() && app.stable_upto + 1 < app.entries.len() {
         let lines = wrap_entry(&app.entries[app.stable_upto], width);
         app.stable.extend(lines);
         app.stable_upto += 1;

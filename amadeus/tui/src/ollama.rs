@@ -89,16 +89,15 @@ pub fn generate(
             return;
         }
         if let Some(delta) = v.get("response").and_then(|r| r.as_str()) {
-            if !delta.is_empty() {
-                if tx
+            if !delta.is_empty()
+                && tx
                     .send(AppEvent::Token {
                         id,
                         delta: delta.to_string(),
                     })
                     .is_err()
-                {
-                    return; // UI is gone
-                }
+            {
+                return; // UI is gone
             }
         }
         if v.get("done").and_then(|d| d.as_bool()).unwrap_or(false) {

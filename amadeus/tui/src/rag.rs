@@ -154,10 +154,7 @@ pub fn index(root: &Path, dir: &str, id: u64, tx: &Sender<AppEvent>) {
             for line in BufReader::new(stdout).lines() {
                 match line {
                     Ok(line) if !line.trim().is_empty() => {
-                        let _ = tx_stdout.send(AppEvent::Note {
-                            id,
-                            text: line,
-                        });
+                        let _ = tx_stdout.send(AppEvent::Note { id, text: line });
                     }
 
                     Ok(_) => {}
@@ -181,10 +178,7 @@ pub fn index(root: &Path, dir: &str, id: u64, tx: &Sender<AppEvent>) {
             for line in BufReader::new(stderr).lines() {
                 match line {
                     Ok(line) if !line.trim().is_empty() => {
-                        let _ = tx_stderr.send(AppEvent::Note {
-                            id,
-                            text: line,
-                        });
+                        let _ = tx_stderr.send(AppEvent::Note { id, text: line });
                     }
 
                     Ok(_) => {}
@@ -228,11 +222,7 @@ pub fn index(root: &Path, dir: &str, id: u64, tx: &Sender<AppEvent>) {
 }
 
 pub fn shell(cmd: &str, id: u64, tx: &Sender<AppEvent>) {
-    let output = match Command::new("sh")
-        .arg("-c")
-        .arg(cmd)
-        .output()
-    {
+    let output = match Command::new("sh").arg("-c").arg(cmd).output() {
         Ok(output) => output,
         Err(e) => {
             let _ = tx.send(AppEvent::Failed {

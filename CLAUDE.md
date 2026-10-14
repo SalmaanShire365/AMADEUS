@@ -74,6 +74,8 @@ Reproduced 2026-10-01 from a fresh index build.
 - **Honest framing.** README and docs claim only what the eval shows. Small fixture set = say so.
 - **Conventional commits:** `feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, `test:`, `perf:`; optional scope, e.g. `feat(rag):`.
 - Don't edit the production index (`~/.amadeus-notest`) by hand; rebuild it with `make index`.
+  `make index` is incremental (it skips files whose hash is unchanged), so after a chunking
+  change, move the old dir aside and build fresh, or unchanged files keep their old chunks.
 - **Verify edits landed.** nvim saves sometimes fail silently. Before running anything against an
   edited file, confirm its contents with `git diff <file>` or `sed -n '<a>,<b>p' <file>`.
 
@@ -93,21 +95,14 @@ Reproduced 2026-10-01 from a fresh index build.
 
 ## Open problems
 
-1. **Indexing aborts on oversized chunks, and loses everything** (`amadeus-mxs`). A single-line file
-   (`docs/design/convoy/stage-launch/bv-insights.json`, 82 KB) becomes one 44k-token chunk. Ollama ≥0.32
-   returns HTTP 500 instead of truncating, and `cmd_index` only commits at the end, so the whole
-   run is lost (this is what broke `~/.amadeus-notest` on 2026-09-15). Fix: hard-cap chunk length in
-   `split_fixed`, and commit per file. Measure, since it changes chunks.
-2. **Fixtures: 8 → 20+, plus 3–5 negative queries** (`amadeus-c12`). Eight queries is too few to
+1. **Fixtures: 8 → 20+, plus 3–5 negative queries** (`amadeus-c12`). Eight queries is too few to
    trust small deltas.
-3. **`DEF_RE` misses Go `type`/`struct`/`interface` declarations** (`amadeus-th1`), so those land
+2. **`DEF_RE` misses Go `type`/`struct`/`interface` declarations** (`amadeus-th1`), so those land
    inside neighbouring chunks.
-4. **Multi-concept dilution** (`hq-lgi`). "how are convoys stored in dolt" retrieves convoy code but
+3. **Multi-concept dilution** (`hq-lgi`). "how are convoys stored in dolt" retrieves convoy code but
    not the storage layer; the embedding averages concepts. Already failed: lexical rerank, IDF
    weighting. Candidates: query decomposition, model reranker.
-5. **Standalone CLI** (`amadeus-wyd`). `amadeus.sh` resolves its home from the script path, the TUI
+4. **Standalone CLI** (`amadeus-wyd`). `amadeus.sh` resolves its home from the script path, the TUI
    from `AMADEUS_HOME`; pick one rule for both.
-6. **README is missing the TUI** (`amadeus-7ba`), still says `rag/venv` (the code uses
+5. **README is missing the TUI** (`amadeus-7ba`), still says `rag/venv` (the code uses
    `amadeus/venv`), and doesn't mention `qwen2.5-coder:1.5b` isn't pulled by default here.
-7. `run_eval.py` `retrieve_ranked_docs` has a duplicated nested loop and returns `None` when no
-   rows come back (`amadeus-71i`).

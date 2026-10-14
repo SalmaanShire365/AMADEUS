@@ -104,3 +104,6 @@ Measured 2026-10-14 when the fixtures grew 8 → 25. The old 8-query baseline wa
    from `AMADEUS_HOME`; pick one rule for both.
 4. **README is missing the TUI** (`amadeus-7ba`), still says `rag/venv` (the code uses
    `amadeus/venv`), and doesn't mention `qwen2.5-coder:1.5b` isn't pulled by default here.
+5. **Negative queries aren't scored** (`amadeus-8wi`). `rag/eval/fixtures_negative.jsonl` holds 4
+   queries with no answer in the corpus; `run_eval.py` ignores them, so the CLI distance threshold
+   is untested.

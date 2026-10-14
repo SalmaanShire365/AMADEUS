@@ -177,7 +177,7 @@
       <a class="btn" href="https://github.com/SalmaanShire365/AMADEUS" target="_blank" rel="noopener">GitHub</a>
     </div>
     <div class="stats">
-      <div class="stat"><strong>11,094</strong><small>chunks indexed</small></div>
+      <div class="stat"><strong>11,104</strong><small>chunks indexed</small></div>
       <div class="stat"><strong>1,231</strong><small>Go files</small></div>
       <div class="stat"><strong>16 min</strong><small>full index, local GPU</small></div>
       <div class="stat"><strong>0</strong><small>API calls</small></div>
@@ -189,7 +189,7 @@
   <div class="wrap">
     <div class="eyebrow">01 / Status</div>
     <h2>Where the project actually is.</h2>
-    <p class="intro">A working retrieval pipeline with a measured baseline, one known failure mode, and a lot of unbuilt roadmap. Stated plainly so the rest of the page can be read honestly.</p>
+    <p class="intro">A working retrieval pipeline with an honest baseline, a few well-understood failure modes, and a lot of unbuilt roadmap. Stated plainly so the rest of the page can be read honestly.</p>
     <div class="status">
       <div class="col on">
         <h3><span class="bullet"></span>Working</h3>
@@ -200,15 +200,17 @@
           <li>Grounded answers with file:line citations</li>
           <li>Evaluation harness reporting recall@k and MRR</li>
           <li>Tiered model routing, 1.5B through 8B</li>
+          <li>Terminal UI (Rust, ratatui) with streaming answers and the execution agent wired in</li>
         </ul>
       </div>
       <div class="col part">
         <h3><span class="bullet"></span>Partly working</h3>
         <ul>
-          <li>Ranking — the right file is retrieved 94% of the time but ranked first only half the time</li>
+          <li>Ranking — the right file is in the top ten for 80% of questions but ranked first for only 38%</li>
           <li>Multi-concept questions collapse to whichever term dominates</li>
           <li>Relevance filtering controls context width, not topicality</li>
-          <li>The benchmark is eight questions; too small to detect small effects</li>
+          <li>Three of the 25 benchmark questions find nothing in the top ten: retrieval lands on files that <em>use</em> a feature, not the one that implements it</li>
+          <li>Four questions with no answer in the corpus exist but aren't scored yet, so the relevance cutoff is untested</li>
         </ul>
       </div>
       <div class="col off">
@@ -252,7 +254,7 @@
   <div class="wrap">
     <div class="eyebrow">03 / Evaluation</div>
     <h2>Four changes tried. Three made it worse.</h2>
-    <p class="intro">The harness scores retrieval against questions whose correct answer file is already known. Current baseline: recall@1 0.500, recall@5 0.938, MRR 0.812. The interesting part is what didn't work.</p>
+    <p class="intro">The harness scores retrieval against questions whose correct answer file is already known. Current baseline, 25 questions: recall@1 0.380, recall@5 0.720, MRR 0.592. The four experiments below were measured on the original eight questions, before the benchmark grew and the numbers came down. The interesting part is what didn't work.</p>
     <div class="findings">
       <div class="finding">
         <span class="tag good">Worked</span>
@@ -281,6 +283,13 @@
         <div class="num">MRR 0.812 → 0.750</div>
         <div class="bar down"><i style="width:75%"></i></div>
         <p>If common tokens were the problem, IDF weighting should have fixed it. It didn't. Term presence across a 1,500-character chunk carries little signal however it's weighted.</p>
+      </div>
+      <div class="finding" style="grid-column:1/-1">
+        <span class="tag" style="color:var(--dim)">Correction</span>
+        <h3>Tripling the benchmark</h3>
+        <div class="num">MRR 0.812 → 0.592</div>
+        <div class="bar down"><i style="width:59%"></i></div>
+        <p>No code changed. Seventeen new questions across more of the codebase, three of them multi-concept, showed the first eight were the easy ones. Recall@5 went 0.938 → 0.720. This is the real starting point.</p>
       </div>
     </div>
     <div class="callout">
@@ -343,9 +352,30 @@
       </div>
 
       <div class="item">
+        <time>13 SEP 2026</time>
+        <h3>A terminal UI to replace the bash loop</h3>
+        <p>Started a Rust front end with ratatui. Answers stream token by token instead of arriving all at once, and the execution agent runs from inside it. The original bash script still works, but new work goes into the TUI.</p>
+        <div class="meta">rust · ratatui · streaming</div>
+      </div>
+
+      <div class="item">
+        <time>11 OCT 2026</time>
+        <h3>Two bugs, zero change in retrieval</h3>
+        <p>A one-line 82 KB file had become a single 44,000-token chunk that newer Ollama versions reject, which failed the whole indexing run. Chunks are now capped at 1,500 characters, and the index saves after every file so a failure costs one file, not sixteen minutes. Separately, the eval harness had a duplicated loop. Every per-question score stayed identical after both fixes, which is the point of measuring.</p>
+        <div class="meta">11,094 → 11,104 chunks · MRR unchanged at 0.812</div>
+      </div>
+
+      <div class="item key">
+        <time>14 OCT 2026</time>
+        <h3>The benchmark grew, and the numbers came down</h3>
+        <p>Eight questions was too few to trust, so it went to 25, each answer file chosen by reading the source, plus four questions with no answer in the corpus. Nothing in the retrieval code changed, and MRR fell from 0.812 to 0.592. The first eight questions were the easy ones. Three of the new ones find nothing in the top ten: in each case retrieval returns files that call the feature rather than the file that implements it. That failure is the clearest argument yet for indexing code structure, which is what Phase 1 is.</p>
+        <div class="meta">25 questions · recall@1 0.380 · recall@5 0.720 · recall@10 0.800 · MRR 0.592</div>
+      </div>
+
+      <div class="item">
         <time>OPEN</time>
         <h3>Multi-concept queries still collapse</h3>
-        <p>Ask how convoys are stored in the database and you get convoy display code with no storage layer — even though asking about the storage layer alone returns it cleanly. The embedding averages the two concepts instead of requiring both. Unsolved.</p>
+        <p>Ask how convoys are stored in the database and you get convoy display code with no storage layer — even though asking about the storage layer alone returns it cleanly. The embedding averages the two concepts instead of requiring both. Unsolved, but now measured: three of the 25 benchmark questions are multi-concept.</p>
       </div>
 
     </div>
@@ -362,7 +392,7 @@
       <div class="phase-num">PHASE 0</div>
       <div>
         <h3>Reliable local retrieval</h3>
-        <p>Indexing, chunking, filtering, and a reproducible benchmark. Mostly done; the benchmark needs to grow before smaller effects are detectable.</p>
+        <p>Indexing, chunking, filtering, and a reproducible benchmark. Mostly done. The benchmark grew from 8 to 25 questions; scoring the no-answer questions is the last piece.</p>
         <ul><li>Repository ingestion and incremental re-indexing</li><li>Local embeddings, SQLite vector storage</li><li>Recall@k and MRR evaluation harness</li></ul>
       </div>
       <span class="pill now">Current</span>
@@ -447,7 +477,7 @@
     </div>
 
     <div class="callout speculative">
-      <strong>Speculative, and worth labelling as such:</strong> if the local-first constraint holds up, the audience is engineering organisations that can't send source code to an external service — finance, healthcare, defence, regulated software. That's a hypothesis about a market, formed from a project that currently has an eight-question benchmark. It's written down to be tested, not because it's established.
+      <strong>Speculative, and worth labelling as such:</strong> if the local-first constraint holds up, the audience is engineering organisations that can't send source code to an external service — finance, healthcare, defence, regulated software. That's a hypothesis about a market, formed from a project that currently has a 25-question benchmark. It's written down to be tested, not because it's established.
     </div>
   </div>
 </section>

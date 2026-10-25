@@ -34,8 +34,14 @@ Consequences:
   calls. That keeps the qwen2.5-coder models usable for `code-helper` without a second protocol.
 - **`think:false`** is sent whenever `/api/show` lists `thinking`. Any `<think>…</think>` that still
   shows up in content (older models, other runtimes) is folded into one dimmed line in the scrollback.
-- **Default tiers:** fast `qwen3:4b` (2.5 GB), main `qwen3:8b` (5.2 GB), heavy `qwen3:14b` (9.3 GB, for
-  12–16 GB cards; on 8 GB it spills to CPU). All three are overridable with `AMADEUS_{FAST,MAIN,HEAVY}_MODEL`.
+- **Default tiers:** fast `qwen3:4b-instruct` (2.5 GB), main `qwen3:8b` (5.2 GB), heavy `qwen3:14b`
+  (9.3 GB, for 12–16 GB cards; on 8 GB it spills to CPU). All three are overridable with
+  `AMADEUS_{FAST,MAIN,HEAVY}_MODEL`.
+- **Not `qwen3:4b`.** That tag is now the Qwen3-4B *Thinking*-2507 build. Its chat template opens
+  `<think>` inside the prompt, so `think:false` can't turn it off, and the reasoning streams into
+  `content` with only a closing `</think>`. Measured: the probe above returned two paragraphs of
+  reasoning in `content` alongside a correct tool call. `qwen3:4b-instruct` (Instruct-2507) gives the
+  same tool call with empty content in 8 s.
 
 ## Architecture
 
@@ -44,7 +50,7 @@ amadeus.sh ── resolves AMADEUS_HOME from its own path, exports it, rebuilds 
    │
    └─ amadeus-tui (Rust, single process)
         ├── ui         header bar, scrollback (markdown, folded <think>), approval card, help overlay
-        ├── app        state + event routing; input is tui-textarea with Up/Down history
+        ├── app        state + event routing; input editor with Up/Down history
         ├── scrollback entries + wrap cache that tolerates a live entry that isn't last
         ├── agent      the one agent loop: /api/chat stream → tool calls → approval → result → repeat
         ├── tools      registry: read_file, list_dir, search_files, write_file, run_command, rag_query
@@ -116,7 +122,7 @@ projects/<slug>/
 
 | project | license | verdict |
 |---|---|---|
-| tui-textarea 0.7.0 | MIT | **used**: input editing, undo. Targets ratatui 0.29, our version |
+| tui-textarea 0.7.0 | MIT | not used: no soft wrap (long lines scroll sideways, a regression from the current hard-wrapping input box), and Up/Down history still has to be written either way. The existing editor got history and line movement instead |
 | pulldown-cmark 0.13 | MIT | **used**: markdown parsing for the scrollback renderer |
 | toml 0.9 + serde 1 | MIT/Apache-2.0 | **used**: template files |
 | tui-markdown 0.3.12 | MIT/Apache-2.0 | not used: needs ratatui 0.30, and our wrap cache needs per-line control anyway |

@@ -4,17 +4,25 @@ use std::time::Duration;
 
 use ratatui::crossterm::event::{self, Event};
 
+use crate::health::Health;
+
 /// Everything that can wake the main loop. The UI thread never blocks on
 /// anything except this channel.
 #[derive(Debug)]
 pub enum AppEvent {
-    /// A key, paste or resize from the terminal.
+    /// A key, paste, mouse or resize event from the terminal.
     Term(Event),
     /// Fires every 100ms. Drives the hint rotation and the busy spinner.
     Tick,
-    /// Retrieval candidates for request `id`, already formatted for display.
-    Sources { id: u64, hits: Vec<String> },
-    /// A streamed token from Ollama.
+    /// The startup health check finished.
+    Health(Health),
+    /// Retrieval for request `id`: chunks used, and raw candidates for /debug.
+    Sources {
+        id: u64,
+        sources: Vec<String>,
+        candidates: Vec<String>,
+    },
+    /// A streamed token for request `id`.
     Token { id: u64, delta: String },
     /// Request `id` finished normally.
     Done { id: u64 },

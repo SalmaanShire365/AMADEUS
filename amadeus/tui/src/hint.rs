@@ -45,6 +45,11 @@ pub const COMMANDS: &[Cmd] = &[
         help: "cycle fast / main / heavy",
     },
     Cmd {
+        name: "/debug",
+        args: "",
+        help: "show retrieval distances",
+    },
+    Cmd {
         name: "/history",
         args: "",
         help: "show this session's history",

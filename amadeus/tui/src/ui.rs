@@ -1,80 +1,12 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
-use crate::app::{layout_input, App, Entry, Kind};
+use crate::app::{layout_input, App};
 use crate::hint::Hint;
-
-fn kind_style(kind: Kind) -> (&'static str, Style) {
-    match kind {
-        Kind::User => (
-            "› ",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Kind::Agent => ("", Style::default()),
-        Kind::System => ("· ", Style::default().fg(Color::DarkGray)),
-        Kind::Source => ("  ", Style::default().fg(Color::Blue)),
-        Kind::Error => ("! ", Style::default().fg(Color::Red)),
-    }
-}
-
-/// Word-wrap one entry into styled lines, with a gutter marker on the first
-/// line and matching indentation on continuations.
-fn wrap_entry(entry: &Entry, width: u16) -> Vec<Line<'static>> {
-    let (prefix, style) = kind_style(entry.kind);
-    let total = width.max(8) as usize;
-    let inner = total.saturating_sub(prefix.len()).max(4);
-    let pad = " ".repeat(prefix.len());
-
-    let mut out: Vec<Line<'static>> = Vec::new();
-    let mut first = true;
-    for raw in entry.text.split('\n') {
-        if raw.is_empty() {
-            out.push(Line::from(""));
-            continue;
-        }
-        for piece in textwrap::wrap(raw, inner) {
-            let gutter = if first {
-                prefix.to_string()
-            } else {
-                pad.clone()
-            };
-            first = false;
-            out.push(Line::from(vec![
-                Span::styled(gutter, style),
-                Span::styled(piece.to_string(), style),
-            ]));
-        }
-    }
-    if out.is_empty() {
-        out.push(Line::from(""));
-    }
-    out.push(Line::from("")); // breathing room between entries
-    out
-}
-
-/// Wrap everything except the final entry once, and re-wrap only the final
-/// entry each frame. That keeps a streaming answer cheap no matter how long
-/// the session's scrollback gets.
-fn ensure_wrapped(app: &mut App, width: u16) -> Vec<Line<'static>> {
-    if app.wrap_width != width {
-        app.wrap_width = width;
-        app.invalidate_wrap();
-    }
-    while !app.entries.is_empty() && app.stable_upto + 1 < app.entries.len() {
-        let lines = wrap_entry(&app.entries[app.stable_upto], width);
-        app.stable.extend(lines);
-        app.stable_upto += 1;
-    }
-    match app.entries.last() {
-        Some(e) if app.stable_upto < app.entries.len() => wrap_entry(e, width),
-        _ => Vec::new(),
-    }
-}
+use crate::theme;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
@@ -104,33 +36,29 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 }
 
 fn draw_scrollback(f: &mut Frame, app: &mut App, area: Rect) {
-    let tail = ensure_wrapped(app, area.width);
-    let total = app.stable.len() + tail.len();
     let h = area.height as usize;
+    let (pinned, scroll) = (app.pinned, app.scroll);
+    let (stable, tail) = app.sb.lines(area.width);
+    let total = stable.len() + tail.len();
     let max_off = total.saturating_sub(h);
 
-    if app.pinned {
-        app.scroll = max_off;
-    } else {
-        if app.scroll >= max_off {
-            app.scroll = max_off;
-            app.pinned = true;
-        }
-    }
-
-    let start = app.scroll.min(max_off);
+    let start = if pinned { max_off } else { scroll.min(max_off) };
     let end = (start + h).min(total);
     let visible: Vec<Line> = (start..end)
         .map(|i| {
-            if i < app.stable.len() {
-                app.stable[i].clone()
+            if i < stable.len() {
+                stable[i].clone()
             } else {
-                tail[i - app.stable.len()].clone()
+                tail[i - stable.len()].clone()
             }
         })
         .collect();
-
     f.render_widget(Paragraph::new(visible), area);
+
+    app.scroll = start;
+    if !pinned && scroll >= max_off {
+        app.pinned = true;
+    }
 }
 
 fn draw_input(f: &mut Frame, app: &App, area: Rect, rows: &[String], crow: usize, ccol: usize) {
@@ -140,13 +68,13 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect, rows: &[String], crow: usize
         " task "
     };
     let border = if app.busy.is_some() {
-        Color::DarkGray
+        theme::dim()
     } else {
-        Color::Cyan
+        theme::accent()
     };
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(border))
+        .border_style(border)
         .title(title);
 
     let visible_rows = rows.len().min(8);
@@ -156,7 +84,7 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect, rows: &[String], crow: usize
     f.render_widget(Paragraph::new(body).block(block), area);
 
     let cy = area.y + 1 + crow.saturating_sub(skip) as u16;
-    let cx = area.x + 2 + ccol as u16;
+    let cx = area.x + 1 + ccol as u16;
     if cy < area.y + area.height - 1 {
         f.set_cursor_position((cx, cy));
     }
@@ -175,29 +103,21 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         _ => String::new(),
     };
     f.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            left,
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::ITALIC),
-        ))),
+        Paragraph::new(Line::from(Span::styled(left, theme::dim_italic()))),
         cols[0],
     );
     f.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            right,
-            Style::default().fg(Color::DarkGray),
-        ))),
+        Paragraph::new(Line::from(Span::styled(right, theme::dim()))),
         cols[1],
     );
 }
 
 fn draw_menu(f: &mut Frame, cmds: &[&crate::hint::Cmd], input_area: Rect) {
-    let n = cmds.len().min(6) as u16;
+    let n = cmds.len().min(8) as u16;
     if n == 0 || input_area.y < n + 2 {
         return;
     }
-    let width = input_area.width.min(60);
+    let width = input_area.width.min(64);
     let area = Rect {
         x: input_area.x,
         y: input_area.y - (n + 2),
@@ -207,17 +127,12 @@ fn draw_menu(f: &mut Frame, cmds: &[&crate::hint::Cmd], input_area: Rect) {
 
     let lines: Vec<Line> = cmds
         .iter()
-        .take(6)
+        .take(8)
         .map(|c| {
             Line::from(vec![
-                Span::styled(
-                    format!("{:<10}", c.name),
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(format!("{:<12}", c.args), Style::default().fg(Color::Gray)),
-                Span::styled(c.help.to_string(), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{:<10}", c.name), theme::accent_bold()),
+                Span::styled(format!("{:<12}", c.args), Style::default()),
+                Span::styled(c.help.to_string(), theme::dim()),
             ])
         })
         .collect();
@@ -227,7 +142,7 @@ fn draw_menu(f: &mut Frame, cmds: &[&crate::hint::Cmd], input_area: Rect) {
         Paragraph::new(lines).block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray))
+                .border_style(theme::dim())
                 .title(" tab to complete "),
         ),
         area,

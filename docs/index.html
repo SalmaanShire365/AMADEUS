@@ -373,6 +373,13 @@
       </div>
 
       <div class="item">
+        <time>14 OCT 2026</time>
+        <h3>A structural fix that made retrieval worse</h3>
+        <p>Go type declarations weren't treated as chunk boundaries, so structs ended up inside whatever function came before them. Adding them looked like an obvious fix for the three questions that find nothing. It wasn't. MRR fell from 0.592 to 0.493, eight questions got worse, one got better, and none of the three moved into the top ten. The split lands on the type line itself, which strands the comment describing the struct at the end of the previous chunk. One question went from first place to not found because its best chunk had been that comment and struct together. Reverted. The next attempt keeps each comment attached to the code it describes.</p>
+        <div class="meta">11,104 → 12,060 chunks · recall@1 0.380 → 0.280 · MRR 0.592 → 0.493 · reverted</div>
+      </div>
+
+      <div class="item">
         <time>OPEN</time>
         <h3>Multi-concept queries still collapse</h3>
         <p>Ask how convoys are stored in the database and you get convoy display code with no storage layer — even though asking about the storage layer alone returns it cleanly. The embedding averages the two concepts instead of requiring both. Unsolved, but now measured: three of the 25 benchmark questions are multi-concept.</p>

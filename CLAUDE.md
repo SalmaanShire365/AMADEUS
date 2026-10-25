@@ -96,7 +96,9 @@ Measured 2026-10-14 when the fixtures grew 8 → 25. The old 8-query baseline wa
 ## Open problems
 
 1. **`DEF_RE` misses Go `type`/`struct`/`interface` declarations** (`amadeus-th1`), so those land
-   inside neighbouring chunks.
+   inside neighbouring chunks. Adding `type ` alone was tried 2026-10-14 and reverted (MRR
+   0.592 → 0.493): the boundary detaches the doc comment above it. Retry with boundaries moved up
+   to the start of the leading comment block, for `func` too.
 2. **Multi-concept dilution** (`hq-lgi`). "how are convoys stored in dolt" retrieves convoy code but
    not the storage layer; the embedding averages concepts. Already failed: lexical rerank, IDF
    weighting. Candidates: query decomposition, model reranker.

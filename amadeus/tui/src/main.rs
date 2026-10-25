@@ -1,7 +1,6 @@
-// Temporary while the harness lands: tools, templates and doctor use these.
-#![allow(dead_code)]
-
+mod agent;
 mod app;
+mod approval;
 mod cli;
 mod event;
 mod health;
@@ -12,8 +11,11 @@ mod paths;
 mod proc;
 mod rag;
 mod render;
+mod runlog;
 mod scrollback;
+mod templates;
 mod theme;
+mod tools;
 mod ui;
 
 use std::io::{self, Stdout};
@@ -30,7 +32,7 @@ use ratatui::crossterm::terminal::{
 };
 use ratatui::Terminal;
 
-use app::{App, Config, QUIET_REDRAW};
+use app::{App, Config, Launch, QUIET_REDRAW};
 use event::AppEvent;
 
 /// Mouse capture gives wheel scrolling but takes over click-drag selection
@@ -44,8 +46,16 @@ fn main() -> Result<()> {
     match args.first().map(String::as_str) {
         Some("ask") => std::process::exit(cli::ask(args.split_off(1))),
         Some("rag") => std::process::exit(cli::rag(args.split_off(1))),
+        Some("replay") => std::process::exit(cli::replay(args.split_off(1))),
         _ => {}
     }
+    let launch = match cli::launch(args) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(2);
+        }
+    };
 
     let cfg = Config::from_env();
 
@@ -58,7 +68,7 @@ fn main() -> Result<()> {
     }));
 
     let mut terminal = setup()?;
-    let result = run(&mut terminal, cfg);
+    let result = run(&mut terminal, cfg, launch);
     restore();
     result
 }
@@ -83,13 +93,18 @@ fn restore() {
     );
 }
 
-fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>, cfg: Config) -> Result<()> {
+fn run(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    cfg: Config,
+    launch: Launch,
+) -> Result<()> {
     let (tx, rx) = mpsc::channel::<AppEvent>();
     event::spawn_input(tx.clone());
     event::spawn_ticker(tx.clone());
 
-    let mut app = App::new(cfg, tx);
-    app.start();
+    let (templates, errors) = templates::load_all();
+    let mut app = App::new(cfg, tx, templates);
+    app.start(launch, errors);
 
     while !app.should_quit {
         terminal.draw(|f| ui::draw(f, &mut app))?;

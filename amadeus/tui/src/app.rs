@@ -13,8 +13,10 @@ use ratatui::crossterm::event::{
 };
 use serde_json::{json, Value};
 
+use crate::agent::{self, RunSpec};
+use crate::approval::Decision;
 use crate::event::AppEvent;
-use crate::health::{self, Health};
+use crate::health::{self, Health, Status};
 use crate::hint;
 use crate::history::InputHistory;
 use crate::ollama::{self, ChatError, Delta};
@@ -23,11 +25,10 @@ use crate::proc;
 use crate::rag::{self, QueryOutcome};
 use crate::render;
 use crate::scrollback::{Kind, Scrollback, View};
+use crate::templates::Template;
 
-const SYSTEM_PROMPT: &str = "You are AMADEUS, an expert software engineering agent.
-You write clean, production-ready code. When asked to build something,
-output complete files with no placeholders. Think step by step.
-Be concise — avoid unnecessary explanation unless asked.";
+const CHAT_PROMPT: &str = "You are AMADEUS, a helpful assistant running entirely on the \
+user's own computer. Answer clearly and concisely. Use markdown when it helps.";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tier {
@@ -62,6 +63,7 @@ pub struct Config {
     pub main_model: String,
     pub heavy_model: String,
     pub history_file: PathBuf,
+    pub runs_dir: PathBuf,
     pub session: u64,
     pub shell_timeout: Duration,
 }
@@ -76,6 +78,7 @@ impl Config {
     pub fn for_root(root: PathBuf) -> Config {
         Config {
             history_file: paths::history_file(&root),
+            runs_dir: paths::runs_dir(&root),
             root,
             ollama_url: env_or("AMADEUS_OLLAMA_URL", "http://localhost:11434"),
             fast_model: env_or("AMADEUS_FAST_MODEL", "qwen3:4b-instruct"),
@@ -137,6 +140,22 @@ pub fn chat_body(url: &str, model: &str, messages: Vec<Value>, tools: Option<Val
     body
 }
 
+/// A side-effecting tool call waiting for y / n / a.
+pub struct Pending {
+    pub title: String,
+    pub body: String,
+    pub scroll: usize,
+    reply: Sender<Decision>,
+}
+
+/// Options from the command line (`amadeus agent`, `make demo`).
+#[derive(Default)]
+pub struct Launch {
+    pub template: Option<String>,
+    pub task: Option<String>,
+    pub auto: bool,
+}
+
 pub struct App {
     pub cfg: Config,
     tx: Sender<AppEvent>,
@@ -154,13 +173,26 @@ pub struct App {
     pub file_context: String,
     pub staged: Vec<String>,
     pub busy: Option<u64>,
+    pub busy_since: Option<Instant>,
     pub debug: bool,
     pub health: Option<Health>,
+
+    pub templates: Vec<Template>,
+    pub template: Option<Template>,
+    /// Messages of the current template conversation, system prompt first.
+    conversation: Vec<Value>,
+    /// Auto-approve for the next agent run only.
+    pub auto_next: bool,
+    pub pending: Option<Pending>,
+    /// Template picker selection, when open.
+    pub picker: Option<usize>,
+    pub show_help: bool,
+    pub last_log: Option<PathBuf>,
 
     next_id: u64,
     pub cancel: Arc<AtomicBool>,
 
-    /// Accumulated text of the in-flight answer, for the history file.
+    /// Accumulated text of the in-flight chat answer, for the history file.
     response: String,
     last_user: String,
 
@@ -172,9 +204,9 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(cfg: Config, tx: Sender<AppEvent>) -> App {
+    pub fn new(cfg: Config, tx: Sender<AppEvent>, templates: Vec<Template>) -> App {
         let now = Instant::now();
-        let mut app = App {
+        App {
             cfg,
             tx,
             sb: Scrollback::default(),
@@ -187,8 +219,17 @@ impl App {
             file_context: String::new(),
             staged: Vec::new(),
             busy: None,
+            busy_since: None,
             debug: false,
             health: None,
+            templates,
+            template: None,
+            conversation: Vec::new(),
+            auto_next: false,
+            pending: None,
+            picker: None,
+            show_help: false,
+            last_log: None,
             next_id: 0,
             cancel: Arc::new(AtomicBool::new(false)),
             response: String::new(),
@@ -198,31 +239,12 @@ impl App {
             used: HashSet::new(),
             ticks: 0,
             should_quit: false,
-        };
-
-        app.push(
-            Kind::System,
-            format!("workspace {}", app.cfg.root.display()),
-        );
-        if !paths::rag_script().is_file() {
-            app.push(
-                Kind::Error,
-                format!(
-                    "AMADEUS checkout not found (expected {}). Run the TUI through amadeus.sh.",
-                    paths::rag_script().display()
-                ),
-            );
         }
-        app.push(
-            Kind::System,
-            "type / for commands, ctrl+t for model tier".into(),
-        );
-        app
     }
 
     /// Things that touch the outside world: input history on disk and the
     /// Ollama health check. Kept out of `new` so tests stay hermetic.
-    pub fn start(&mut self) {
+    pub fn start(&mut self, launch: Launch, template_errors: Vec<String>) {
         self.hist = InputHistory::load(paths::input_history_file());
         let tx = self.tx.clone();
         let url = self.cfg.ollama_url.clone();
@@ -230,6 +252,48 @@ impl App {
         thread::spawn(move || {
             let _ = tx.send(AppEvent::Health(health::check(&url, &tiers)));
         });
+
+        self.welcome();
+        for e in template_errors {
+            self.push(Kind::Error, format!("template skipped: {e}"));
+        }
+        if !paths::rag_script().is_file() {
+            self.push(
+                Kind::Error,
+                format!(
+                    "AMADEUS checkout not found (expected {}). Run the TUI through amadeus.sh.",
+                    paths::rag_script().display()
+                ),
+            );
+        }
+
+        self.auto_next = launch.auto;
+        if let Some(name) = launch.template {
+            self.use_template(&name);
+        }
+        if let Some(task) = launch.task {
+            self.input = task;
+            self.cursor = self.input.len();
+            self.submit();
+        }
+    }
+
+    fn welcome(&mut self) {
+        let mut s = String::from(
+            "# AMADEUS\n\nA task assistant that runs entirely on this computer. \
+             Pick a template, point it at your files, approve each change.\n\n",
+        );
+        for (i, t) in self.templates.iter().enumerate() {
+            s.push_str(&format!(
+                "{}. **{}** `/use {}`  \n{}\n",
+                i + 1,
+                t.title,
+                t.name,
+                t.description
+            ));
+        }
+        s.push_str("\n`/new` opens the picker · `?` for help · or just type a question to chat");
+        self.push(Kind::Agent, s);
     }
 
     // ---------- scrollback ----------
@@ -244,19 +308,26 @@ impl App {
     fn begin(&mut self) -> u64 {
         self.next_id += 1;
         self.busy = Some(self.next_id);
+        self.busy_since = Some(Instant::now());
         self.cancel = Arc::new(AtomicBool::new(false));
         self.response.clear();
         self.next_id
     }
 
-    fn finish(&mut self) {
+    fn end_busy(&mut self) {
         self.busy = None;
+        self.busy_since = None;
+        self.pending = None;
         self.sb.close_live();
+        self.response.clear();
+    }
+
+    fn finish(&mut self) {
         let answer = render::strip_think(&self.response);
-        if !answer.is_empty() {
+        if !answer.is_empty() && self.template.is_none() {
             self.write_history(&self.last_user.clone(), &answer);
         }
-        self.response.clear();
+        self.end_busy();
     }
 
     fn write_history(&self, user: &str, agent: &str) {
@@ -299,6 +370,49 @@ impl App {
                     self.sb.append_live(&delta);
                 }
             }
+            AppEvent::TurnEnd { id, keep } => {
+                if self.busy == Some(id) {
+                    if keep {
+                        self.sb.close_live();
+                    } else {
+                        self.sb.discard_live();
+                    }
+                }
+            }
+            AppEvent::Approval {
+                id,
+                title,
+                body,
+                reply,
+            } => {
+                if self.busy == Some(id) {
+                    self.sb.close_live();
+                    self.pending = Some(Pending {
+                        title,
+                        body,
+                        scroll: 0,
+                        reply,
+                    });
+                }
+            }
+            AppEvent::Tool {
+                id,
+                headline,
+                summary,
+                ok,
+            } => {
+                if self.busy == Some(id) {
+                    self.sb.close_live();
+                    let mark = if ok { "" } else { "✗ " };
+                    self.push(Kind::Tool, format!("{headline}\n{mark}{summary}"));
+                }
+            }
+            AppEvent::RunEnd { id, messages, log } => {
+                if self.busy == Some(id) {
+                    self.conversation = messages;
+                    self.last_log = Some(log);
+                }
+            }
             AppEvent::Sources {
                 id,
                 sources,
@@ -338,8 +452,7 @@ impl App {
                 if self.busy == Some(id) {
                     self.sb.close_live();
                     self.push(Kind::Error, text);
-                    self.busy = None;
-                    self.response.clear();
+                    self.end_busy();
                 }
             }
         }
@@ -353,36 +466,26 @@ impl App {
                     self.push(Kind::Error, p);
                 }
             }
-            Ok(v) => {
-                let mut missing_current = false;
-                let mut others = Vec::new();
-                for m in h.missing() {
-                    if m.name == current {
-                        missing_current = true;
-                    } else {
-                        others.push(format!("{} ({})", m.tier, m.name));
-                    }
-                }
-                if missing_current {
+            Ok(_) => {
+                if h.missing().any(|m| m.name == current) {
                     self.push(
                         Kind::Error,
                         format!("model {current} isn't pulled. Fix: ollama pull {current}"),
-                    );
-                } else {
-                    self.push(Kind::System, format!("ollama {v} ready · {current}"));
-                }
-                if !others.is_empty() {
-                    self.push(
-                        Kind::System,
-                        format!(
-                            "other tiers not pulled yet: {} (amadeus doctor shows the fix)",
-                            others.join(", ")
-                        ),
                     );
                 }
             }
         }
         self.health = Some(h);
+    }
+
+    /// Green when Ollama is up and the active model is pulled.
+    pub fn ollama_status(&self) -> Option<Status> {
+        let h = self.health.as_ref()?;
+        Some(match h.status() {
+            Status::Down => Status::Down,
+            _ if h.missing().any(|m| m.name == self.cfg.model(self.tier)) => Status::Degraded,
+            _ => Status::Ok,
+        })
     }
 
     fn on_term(&mut self, e: Event) {
@@ -393,8 +496,10 @@ impl App {
                 }
             }
             Event::Paste(s) => {
-                self.last_key = Instant::now();
-                self.insert_str(&s.replace("\r\n", "\n").replace('\r', "\n"));
+                if self.pending.is_none() && self.picker.is_none() {
+                    self.last_key = Instant::now();
+                    self.insert_str(&s.replace("\r\n", "\n").replace('\r', "\n"));
+                }
             }
             Event::Mouse(m) => match m.kind {
                 MouseEventKind::ScrollUp => self.scroll_up(3),
@@ -416,18 +521,98 @@ impl App {
         self.scroll += n;
     }
 
+    fn cancel_run(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+        // Dropping the pending reply wakes an agent blocked on approval.
+        self.pending = None;
+        self.push(Kind::System, "cancelling…".into());
+    }
+
     fn on_key(&mut self, k: KeyEvent) {
         self.last_key = Instant::now();
+        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
 
+        if ctrl && k.code == KeyCode::Char('c') && self.busy.is_some() {
+            self.cancel_run();
+            return;
+        }
+        if self.show_help {
+            self.show_help = false;
+            return;
+        }
+        if self.pending.is_some() {
+            self.on_approval_key(k);
+            return;
+        }
+        if self.picker.is_some() {
+            self.on_picker_key(k);
+            return;
+        }
+        self.on_edit_key(k);
+        if self.input.is_empty() {
+            self.idle_since = Instant::now();
+        }
+    }
+
+    fn on_approval_key(&mut self, k: KeyEvent) {
+        match k.code {
+            KeyCode::PageDown | KeyCode::Down => {
+                if let Some(p) = self.pending.as_mut() {
+                    p.scroll += if k.code == KeyCode::Down { 1 } else { 10 };
+                }
+            }
+            KeyCode::PageUp | KeyCode::Up => {
+                if let Some(p) = self.pending.as_mut() {
+                    p.scroll = p
+                        .scroll
+                        .saturating_sub(if k.code == KeyCode::Up { 1 } else { 10 });
+                }
+            }
+            code => {
+                if let Some(d) = Decision::from_key(code) {
+                    if let Some(p) = self.pending.take() {
+                        let mark = if d.allows() { "✓" } else { "✗" };
+                        self.push(Kind::System, format!("{mark} {}: {}", d.label(), p.title));
+                        let _ = p.reply.send(d);
+                    }
+                }
+            }
+        }
+    }
+
+    fn on_picker_key(&mut self, k: KeyEvent) {
+        let n = self.templates.len();
+        let Some(sel) = self.picker else { return };
+        match k.code {
+            KeyCode::Up => self.picker = Some(sel.checked_sub(1).unwrap_or(n.saturating_sub(1))),
+            KeyCode::Down => self.picker = Some(if sel + 1 >= n { 0 } else { sel + 1 }),
+            KeyCode::Char(c) if c.is_ascii_digit() => {
+                let i = c.to_digit(10).unwrap_or(0) as usize;
+                if (1..=n).contains(&i) {
+                    self.picker = None;
+                    let name = self.templates[i - 1].name.clone();
+                    self.use_template(&name);
+                }
+            }
+            KeyCode::Enter => {
+                self.picker = None;
+                if let Some(t) = self.templates.get(sel) {
+                    let name = t.name.clone();
+                    self.use_template(&name);
+                }
+            }
+            KeyCode::Esc | KeyCode::Char('q') => self.picker = None,
+            _ => {}
+        }
+    }
+
+    fn on_edit_key(&mut self, k: KeyEvent) {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         let alt = k.modifiers.contains(KeyModifiers::ALT);
 
         match k.code {
             KeyCode::Char('c') if ctrl => {
-                if self.busy.is_some() {
-                    self.cancel.store(true, Ordering::Relaxed);
-                    self.push(Kind::System, "cancelling…".into());
-                } else if self.input.is_empty() {
+                if self.input.is_empty() {
                     self.should_quit = true;
                 } else {
                     self.clear_input();
@@ -446,6 +631,7 @@ impl App {
             KeyCode::Char('w') if ctrl => self.delete_word(),
             KeyCode::Char('a') if ctrl => self.cursor = line_start(&self.input, self.cursor),
             KeyCode::Char('e') if ctrl => self.cursor = line_end(&self.input, self.cursor),
+            KeyCode::Char('?') if self.input.is_empty() => self.show_help = true,
             KeyCode::Enter if alt => self.insert_str("\n"),
             KeyCode::Enter => self.submit(),
             KeyCode::Tab => self.complete(),
@@ -467,15 +653,12 @@ impl App {
             KeyCode::Down if ctrl => self.scroll_down(1),
             KeyCode::Up => self.history_or_line(true),
             KeyCode::Down => self.history_or_line(false),
+            KeyCode::Esc => {}
             KeyCode::Char(c) => {
                 let s = c.to_string();
                 self.insert_str(&s);
             }
             _ => {}
-        }
-
-        if self.input.is_empty() {
-            self.idle_since = Instant::now();
         }
     }
 
@@ -566,17 +749,26 @@ impl App {
         if !self.input.starts_with('/') {
             return;
         }
-        let token = self
+        let first = self
             .input
             .split_whitespace()
             .next()
             .unwrap_or("/")
             .to_string();
-        if self.input.len() != token.len() {
+        // `/use fo` + tab completes the template name.
+        if first == "/use" {
+            let partial = self.input["/use".len()..].trim();
+            if let Some(t) = self.templates.iter().find(|t| t.name.starts_with(partial)) {
+                self.input = format!("/use {}", t.name);
+                self.cursor = self.input.len();
+            }
             return;
         }
-        if let Some(first) = hint::matches(&token).first() {
-            self.input = format!("{} ", first.name);
+        if self.input.len() != first.len() {
+            return;
+        }
+        if let Some(c) = hint::matches(&first).first() {
+            self.input = format!("{} ", c.name);
             self.cursor = self.input.len();
         }
     }
@@ -600,7 +792,11 @@ impl App {
 
     fn route(&mut self, text: &str) {
         if !text.starts_with('/') {
-            self.ask(text.to_string());
+            if self.template.is_some() {
+                self.run_task(text.to_string());
+            } else {
+                self.ask(text.to_string());
+            }
             return;
         }
 
@@ -612,24 +808,66 @@ impl App {
 
         match cmd {
             "/quit" | "/exit" => self.should_quit = true,
+            "/help" => self.show_help = true,
+            "/new" => self.open_picker(),
+            "/use" => {
+                if arg.is_empty() {
+                    self.open_picker();
+                } else {
+                    self.use_template(arg);
+                }
+            }
+            "/chat" => {
+                self.template = None;
+                self.conversation.clear();
+                self.push(Kind::System, "plain chat: no tools, no files".into());
+            }
+            "/reset" => {
+                self.conversation.clear();
+                self.push(
+                    Kind::System,
+                    "conversation cleared; the template stays".into(),
+                );
+            }
+            "/auto" => {
+                self.auto_next = !self.auto_next;
+                let s = if self.auto_next {
+                    "auto-approve ON for the next run: writes and commands will run without asking"
+                } else {
+                    "auto-approve off: every write and command asks first"
+                };
+                self.push(Kind::System, s.into());
+            }
+            "/log" => match &self.last_log {
+                Some(p) => {
+                    let p = p.display().to_string();
+                    self.push(
+                        Kind::System,
+                        format!("run log: {p}\nreadable: amadeus replay {p}"),
+                    );
+                }
+                None => self.push(Kind::System, "no run yet in this session".into()),
+            },
             "/model" => self.cycle_tier(),
             "/debug" => {
                 self.debug = !self.debug;
-                let state = if self.debug { "on" } else { "off" };
-                self.push(
-                    Kind::System,
-                    format!(
-                        "debug {state}: retrieval distances are {}shown",
-                        if self.debug { "" } else { "not " }
-                    ),
-                );
+                let s = if self.debug {
+                    "on: retrieval distances shown"
+                } else {
+                    "off"
+                };
+                self.push(Kind::System, format!("debug {s}"));
             }
             "/clear" => {
                 self.sb.clear();
                 self.file_context.clear();
                 self.staged.clear();
+                self.conversation.clear();
                 let _ = fs::write(&self.cfg.history_file, "");
-                self.push(Kind::System, "history cleared".into());
+                self.push(
+                    Kind::System,
+                    "screen, conversation and chat history cleared".into(),
+                );
             }
             "/history" => {
                 let h = fs::read_to_string(&self.cfg.history_file).unwrap_or_default();
@@ -641,54 +879,112 @@ impl App {
                 self.push(Kind::System, h);
             }
             "/file" => self.stage_file(arg),
-            "/index" => {
-                let dir = if arg.is_empty() { "." } else { arg }.to_string();
-                let id = self.begin();
-                let (root, tx, cancel) =
-                    (self.cfg.root.clone(), self.tx.clone(), self.cancel.clone());
-                thread::spawn(move || {
-                    let res = rag::index(&root, &dir, &cancel, |l| {
-                        let _ = tx.send(AppEvent::Note {
-                            id,
-                            text: l.to_string(),
-                        });
-                    });
-                    let _ = tx.send(match res {
-                        Ok(()) => AppEvent::Done { id },
-                        Err(text) => AppEvent::Failed { id, text },
-                    });
-                });
-            }
+            "/index" => self.index(arg),
             "/shell" => {
                 if arg.is_empty() {
                     self.push(Kind::Error, "usage: /shell <cmd>".into());
-                    return;
+                } else {
+                    self.shell(arg.to_string());
                 }
-                self.shell(arg.to_string());
             }
             "/rag" => {
                 if arg.is_empty() {
                     self.push(Kind::Error, "usage: /rag <question>".into());
-                    return;
+                } else {
+                    self.rag(arg.to_string());
                 }
-                self.rag(arg.to_string());
             }
             "/ask" => {
                 if arg.is_empty() {
                     self.push(Kind::Error, "usage: /ask <task>".into());
-                    return;
+                } else {
+                    self.ask(arg.to_string());
                 }
-                self.ask(arg.to_string());
             }
             "/agent" => {
                 if arg.is_empty() {
                     self.push(Kind::Error, "usage: /agent <task>".into());
-                    return;
+                } else if self.use_template("code-helper") {
+                    self.input.clear();
+                    self.cursor = 0;
+                    self.run_task(arg.to_string());
                 }
-                self.agent(arg.to_string());
             }
-            other => self.push(Kind::Error, format!("unknown command {other}")),
+            other => self.push(Kind::Error, format!("unknown command {other} (? for help)")),
         }
+    }
+
+    fn open_picker(&mut self) {
+        if self.templates.is_empty() {
+            self.push(
+                Kind::Error,
+                "no templates found in AMADEUS_HOME/templates".into(),
+            );
+            return;
+        }
+        let cur = self
+            .template
+            .as_ref()
+            .and_then(|t| self.templates.iter().position(|x| x.name == t.name))
+            .unwrap_or(0);
+        self.picker = Some(cur);
+    }
+
+    /// Switch to a template: new conversation, its tier, and its example in
+    /// the input box ready to send or edit.
+    pub fn use_template(&mut self, name: &str) -> bool {
+        let Some(t) = self.templates.iter().find(|t| t.name == name).cloned() else {
+            let names: Vec<&str> = self.templates.iter().map(|t| t.name.as_str()).collect();
+            self.push(
+                Kind::Error,
+                format!("no template {name:?}. Available: {}", names.join(", ")),
+            );
+            return false;
+        };
+        self.tier = t.tier();
+        self.conversation.clear();
+        let approval = if t.uses_approval() {
+            "you approve every file write and command"
+        } else {
+            "read-only: it can't change anything"
+        };
+        self.push(
+            Kind::System,
+            format!(
+                "using {} · {} model · tools: {} · {approval}",
+                t.title,
+                self.tier.label(),
+                t.tools.join(", ")
+            ),
+        );
+        self.input = t.example.clone();
+        self.cursor = self.input.len();
+        self.template = Some(t);
+        true
+    }
+
+    fn run_task(&mut self, task: String) {
+        let Some(t) = self.template.clone() else {
+            return;
+        };
+        let id = self.begin();
+        self.last_user = task.clone();
+        let auto = std::mem::take(&mut self.auto_next);
+        if auto {
+            self.push(Kind::System, "auto-approve is on for this run".into());
+        }
+        let spec = RunSpec {
+            url: self.cfg.ollama_url.clone(),
+            model: self.cfg.model(self.tier).to_string(),
+            template: t,
+            root: self.cfg.root.clone(),
+            history: self.conversation.clone(),
+            task,
+            auto,
+            log_dir: self.cfg.runs_dir.clone(),
+        };
+        let (tx, cancel) = (self.tx.clone(), self.cancel.clone());
+        thread::spawn(move || agent::run(spec, id, tx, cancel));
     }
 
     fn stage_file(&mut self, path: &str) {
@@ -721,7 +1017,7 @@ impl App {
         self.staged.clear();
         self.last_user = task;
         self.spawn_chat(vec![
-            json!({"role": "system", "content": SYSTEM_PROMPT}),
+            json!({"role": "system", "content": CHAT_PROMPT}),
             json!({"role": "user", "content": user}),
         ]);
     }
@@ -732,6 +1028,24 @@ impl App {
         let url = self.cfg.ollama_url.clone();
         let model = self.cfg.model(self.tier).to_string();
         thread::spawn(move || stream_chat(&url, &model, messages, id, &tx, &cancel));
+    }
+
+    fn index(&mut self, arg: &str) {
+        let dir = if arg.is_empty() { "." } else { arg }.to_string();
+        let id = self.begin();
+        let (root, tx, cancel) = (self.cfg.root.clone(), self.tx.clone(), self.cancel.clone());
+        thread::spawn(move || {
+            let res = rag::index(&root, &dir, &cancel, |l| {
+                let _ = tx.send(AppEvent::Note {
+                    id,
+                    text: l.to_string(),
+                });
+            });
+            let _ = tx.send(match res {
+                Ok(()) => AppEvent::Done { id },
+                Err(text) => AppEvent::Failed { id, text },
+            });
+        });
     }
 
     fn rag(&mut self, question: String) {
@@ -783,48 +1097,17 @@ impl App {
         });
     }
 
-    fn agent(&mut self, task: String) {
-        let id = self.begin();
-        self.last_user = format!("agent {task}");
-        let (tx, cancel) = (self.tx.clone(), self.cancel.clone());
-        let root = self.cfg.root.clone();
-        let model = self.cfg.model(self.tier).to_string();
-
-        thread::spawn(move || {
-            let script = paths::amadeus_home().join("agent/agent.py");
-            if !script.is_file() {
-                let _ = tx.send(AppEvent::Failed {
-                    id,
-                    text: format!("agent.py not found: {}", script.display()),
-                });
-                return;
-            }
-            let _ = tx.send(AppEvent::Note {
-                id,
-                text: format!("starting AMADEUS agent with {model} in {}", root.display()),
-            });
-            let mut c = std::process::Command::new(paths::python());
-            c.arg(&script)
-                .arg(&task)
-                .arg("--model")
-                .arg(&model)
-                .arg("--yes")
-                .current_dir(&root);
-            let res = proc::run(c, &cancel, None, |_, l| {
-                if !l.trim().is_empty() {
-                    let _ = tx.send(AppEvent::Note {
-                        id,
-                        text: l.to_string(),
-                    });
-                }
-            });
-            finish_proc(id, &tx, res, "agent");
-        });
-    }
-
     // ---------- view helpers ----------
 
     pub fn hint(&self) -> hint::Hint {
+        if self.pending.is_some() {
+            return hint::Hint::Tip(
+                "review the change above: y approve · n skip · a approve the rest".into(),
+            );
+        }
+        if self.busy.is_some() && self.input.is_empty() {
+            return hint::Hint::Tip("working… ctrl+c stops it".into());
+        }
         let now = Instant::now();
         hint::hint(
             &self.input,
@@ -841,9 +1124,15 @@ impl App {
 
     pub fn status_right(&self) -> String {
         let mut s = String::new();
-        if self.busy.is_some() {
-            s.push_str(self.spinner());
-            s.push(' ');
+        if let Some(t) = self.busy_since {
+            if self.pending.is_some() {
+                s.push_str("waiting for you · ");
+            } else {
+                s.push_str(&format!("{} {}s · ", self.spinner(), t.elapsed().as_secs()));
+            }
+        }
+        if self.auto_next {
+            s.push_str("auto-approve next run · ");
         }
         if !self.staged.is_empty() {
             s.push_str(&format!("{} staged · ", self.staged.len()));
@@ -1019,14 +1308,40 @@ pub const QUIET_REDRAW: Duration = Duration::from_millis(250);
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::templates;
     use ratatui::crossterm::event::{KeyEventState, MouseEvent};
     use std::sync::mpsc;
 
+    fn tpl(name: &str, tools: &[&str]) -> Template {
+        templates::parse(&format!(
+            "name = \"{name}\"\ntitle = \"T {name}\"\ndescription = \"d\"\nsystem = \"s\"\n\
+             tools = [{}]\nexample = \"example for {name}\"\n",
+            tools
+                .iter()
+                .map(|t| format!("\"{t}\""))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
+        .unwrap()
+    }
+
     fn app() -> App {
-        let (tx, _rx) = mpsc::channel();
+        let (tx, rx) = mpsc::channel();
         // Leak the receiver so sends from worker threads never fail.
-        std::mem::forget(_rx);
-        App::new(Config::for_root(PathBuf::from("/nonexistent/ws")), tx)
+        std::mem::forget(rx);
+        let mut cfg = Config::for_root(PathBuf::from("/nonexistent/ws"));
+        // Hermetic: refused connections, and logs in a temp dir.
+        cfg.ollama_url = "http://127.0.0.1:1".into();
+        cfg.runs_dir =
+            std::env::temp_dir().join(format!("amadeus-test-runs-{}", std::process::id()));
+        App::new(
+            cfg,
+            tx,
+            vec![
+                tpl("one", &["read_file"]),
+                tpl("two", &["read_file", "write_file"]),
+            ],
+        )
     }
 
     fn key(code: KeyCode, mods: KeyModifiers) -> AppEvent {
@@ -1036,6 +1351,10 @@ mod tests {
             kind: KeyEventKind::Press,
             state: KeyEventState::NONE,
         }))
+    }
+
+    fn press(a: &mut App, c: char) {
+        a.handle(key(KeyCode::Char(c), KeyModifiers::NONE));
     }
 
     fn texts(a: &App) -> Vec<(Kind, String)> {
@@ -1107,22 +1426,141 @@ mod tests {
     }
 
     #[test]
-    fn a_second_answer_opens_a_new_entry() {
+    fn tool_call_text_is_discarded_and_the_next_turn_opens_fresh() {
         let mut a = app();
-        let one = a.begin();
+        let id = a.begin();
         a.handle(AppEvent::Token {
-            id: one,
-            delta: "first".into(),
+            id,
+            delta: "{\"name\":\"read_file\"}".into(),
         });
-        a.handle(AppEvent::Done { id: one });
-        let two = a.begin();
+        a.handle(AppEvent::TurnEnd { id, keep: false });
+        a.handle(AppEvent::Tool {
+            id,
+            headline: "read_file a".into(),
+            summary: "3 lines".into(),
+            ok: true,
+        });
         a.handle(AppEvent::Token {
-            id: two,
-            delta: "second".into(),
+            id,
+            delta: "Summary".into(),
         });
+        a.handle(AppEvent::TurnEnd { id, keep: true });
         let t = texts(&a);
-        assert_eq!(t[t.len() - 2].1, "first");
-        assert_eq!(t[t.len() - 1].1, "second");
+        assert!(!t.iter().any(|(_, s)| s.contains("\"name\"")));
+        assert_eq!(t[t.len() - 2], (Kind::Tool, "read_file a\n3 lines".into()));
+        assert_eq!(t[t.len() - 1], (Kind::Agent, "Summary".into()));
+    }
+
+    #[test]
+    fn approval_keys_reach_the_agent_and_never_the_input() {
+        for (k, want) in [
+            ('y', Decision::Approve),
+            ('n', Decision::Deny),
+            ('a', Decision::ApproveRest),
+        ] {
+            let mut a = app();
+            let id = a.begin();
+            let (rtx, rrx) = mpsc::channel();
+            a.handle(AppEvent::Approval {
+                id,
+                title: "create x.md".into(),
+                body: "+hi".into(),
+                reply: rtx,
+            });
+            press(&mut a, 'z'); // ignored
+            assert!(a.pending.is_some());
+            press(&mut a, k);
+            assert_eq!(rrx.try_recv().unwrap(), want);
+            assert!(a.pending.is_none());
+            assert!(a.input.is_empty(), "approval keys must not be typed");
+            assert!(texts(&a).last().unwrap().1.contains("create x.md"));
+        }
+    }
+
+    #[test]
+    fn enter_does_not_approve() {
+        let mut a = app();
+        let id = a.begin();
+        let (rtx, rrx) = mpsc::channel();
+        a.handle(AppEvent::Approval {
+            id,
+            title: "t".into(),
+            body: String::new(),
+            reply: rtx,
+        });
+        a.handle(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(rrx.try_recv().is_err());
+        assert!(a.pending.is_some());
+    }
+
+    #[test]
+    fn ctrl_c_during_approval_cancels_and_releases_the_agent() {
+        let mut a = app();
+        let id = a.begin();
+        let (rtx, rrx) = mpsc::channel();
+        a.handle(AppEvent::Approval {
+            id,
+            title: "t".into(),
+            body: String::new(),
+            reply: rtx,
+        });
+        a.handle(key(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(a.pending.is_none());
+        assert!(a.cancel.load(Ordering::Relaxed));
+        assert!(matches!(
+            rrx.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
+    }
+
+    #[test]
+    fn picker_selects_a_template_and_prefills_its_example() {
+        let mut a = app();
+        a.input = "/new".into();
+        a.cursor = 4;
+        a.handle(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(a.picker, Some(0));
+        a.handle(key(KeyCode::Down, KeyModifiers::NONE));
+        a.handle(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(a.template.as_ref().unwrap().name, "two");
+        assert_eq!(a.input, "example for two");
+        assert!(texts(&a)
+            .last()
+            .unwrap()
+            .1
+            .contains("you approve every file write"));
+    }
+
+    #[test]
+    fn use_unknown_template_lists_the_real_ones() {
+        let mut a = app();
+        assert!(!a.use_template("nope"));
+        assert!(texts(&a).last().unwrap().1.contains("one, two"));
+    }
+
+    #[test]
+    fn auto_approve_is_consumed_by_one_run() {
+        let mut a = app();
+        a.use_template("one");
+        a.auto_next = true;
+        a.input = "go".into();
+        a.cursor = 2;
+        a.handle(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(!a.auto_next, "the next run asks again");
+        assert!(a.busy.is_some());
+    }
+
+    #[test]
+    fn question_mark_opens_help_only_on_an_empty_input() {
+        let mut a = app();
+        press(&mut a, '?');
+        assert!(a.show_help);
+        press(&mut a, 'x');
+        assert!(!a.show_help);
+        assert!(a.input.is_empty(), "the closing key isn't typed");
+        press(&mut a, 'w');
+        press(&mut a, '?');
+        assert_eq!(a.input, "w?");
     }
 
     #[test]

@@ -1,9 +1,12 @@
+use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::Duration;
 
 use ratatui::crossterm::event::{self, Event};
+use serde_json::Value;
 
+use crate::approval::Decision;
 use crate::health::Health;
 
 /// Everything that can wake the main loop. The UI thread never blocks on
@@ -24,6 +27,30 @@ pub enum AppEvent {
     },
     /// A streamed token for request `id`.
     Token { id: u64, delta: String },
+    /// A model turn ended. `keep` is false when the streamed text was a tool
+    /// call written as JSON, which shouldn't stay on screen.
+    TurnEnd { id: u64, keep: bool },
+    /// The agent wants to run a side-effecting tool and is blocked until a
+    /// decision is sent on `reply`.
+    Approval {
+        id: u64,
+        title: String,
+        body: String,
+        reply: Sender<Decision>,
+    },
+    /// A tool call finished (or was declined).
+    Tool {
+        id: u64,
+        headline: String,
+        summary: String,
+        ok: bool,
+    },
+    /// An agent run ended: the conversation so far, and where its log is.
+    RunEnd {
+        id: u64,
+        messages: Vec<Value>,
+        log: PathBuf,
+    },
     /// Request `id` finished normally.
     Done { id: u64 },
     /// A line of plain output (indexing progress, shell output, notices).

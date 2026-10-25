@@ -45,6 +45,7 @@ pub struct Scrollback {
 }
 
 impl Scrollback {
+    #[cfg(test)]
     pub fn entries(&self) -> &[Entry] {
         &self.entries
     }
@@ -83,6 +84,15 @@ impl Scrollback {
         if let Some(i) = self.live.take() {
             if self.entries.get(i).is_some_and(|e| e.text.is_empty()) {
                 // Safe for the cache: it only ever covers entries before `i`.
+                self.entries.remove(i);
+            }
+        }
+    }
+
+    /// Drop the live entry entirely (a tool call the model wrote as text).
+    pub fn discard_live(&mut self) {
+        if let Some(i) = self.live.take() {
+            if i < self.entries.len() {
                 self.entries.remove(i);
             }
         }

@@ -13,11 +13,8 @@ export AMADEUS_HOME="$SCRIPT_DIR"
 
 RAG_PY="$SCRIPT_DIR/rag/rag.py"
 VENV_PY="$SCRIPT_DIR/venv/bin/python3"
-AGENT_PY="$SCRIPT_DIR/agent/agent.py"
 TUI_DIR="$SCRIPT_DIR/tui"
 TUI_BIN="$TUI_DIR/target/release/amadeus-tui"
-
-MAIN_MODEL="${AMADEUS_MAIN_MODEL:-qwen3:8b}"
 
 python_bin() {
     if [[ -x "$VENV_PY" ]]; then echo "$VENV_PY"; else echo python3; fi
@@ -60,14 +57,16 @@ AMADEUS — local AI task harness (Ollama, nothing leaves this machine)
 
 Usage:
   amadeus                         open the TUI in the current directory
-  amadeus tui                     same
+  amadeus tui [--template NAME] [--task TEXT] [--auto]
+                                  same, optionally starting a template and task
   amadeus tui-dev                 run the TUI with cargo run (debug build)
   amadeus ask [--fast|--heavy] <task>
                                   one-shot answer, streamed to stdout
   amadeus rag [--debug] [--heavy] <question>
                                   one-shot answer grounded in the RAG index
   amadeus index [dir]             build or refresh the RAG index
-  amadeus agent <task>            coding agent (alias: codex)
+  amadeus agent <task>            TUI on the code-helper template, running <task> (alias: codex)
+  amadeus replay [log.jsonl]      readable transcript of a task's run log (latest by default)
   amadeus help                    this message
 EOF
 }
@@ -92,8 +91,14 @@ case "$CMD" in
         rag_python index "${1:-.}"
         ;;
     agent|codex)
+        # One agent loop: the TUI's, with its approval prompts.
         [[ $# -eq 0 ]] && { echo "usage: amadeus agent <task>"; exit 1; }
-        exec "$(python_bin)" "$AGENT_PY" "$*" --model "$MAIN_MODEL"
+        ensure_tui
+        exec "$TUI_BIN" --template code-helper --task "$*"
+        ;;
+    replay)
+        ensure_tui
+        exec "$TUI_BIN" replay "$@"
         ;;
     help|-h|--help)
         usage

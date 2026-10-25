@@ -7,9 +7,10 @@ use std::sync::Arc;
 
 use serde_json::json;
 
-use crate::app::{chat_body, Config, Tier};
+use crate::app::{chat_body, Config, Launch, Tier};
 use crate::ollama::{self, Delta};
 use crate::rag::{self, QueryOutcome};
+use crate::runlog;
 
 fn tier_flag(args: &mut Vec<String>, default: Tier) -> Result<(Tier, bool), String> {
     let (mut tier, mut debug) = (default, false);
@@ -101,6 +102,56 @@ pub fn rag(mut args: Vec<String>) -> i32 {
         QueryOutcome::Cancelled => 130,
         QueryOutcome::Err(e) => {
             eprintln!("error: {e}");
+            1
+        }
+    }
+}
+
+/// Interactive flags: `--template NAME`, `--task TEXT`, `--auto`.
+pub fn launch(args: Vec<String>) -> Result<Launch, String> {
+    let mut l = Launch::default();
+    let mut it = args.into_iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--template" | "-t" => l.template = Some(it.next().ok_or("--template needs a name")?),
+            "--task" => l.task = Some(it.next().ok_or("--task needs text")?),
+            "--auto" => l.auto = true,
+            "-h" | "--help" => {
+                return Err(
+                    "usage: amadeus-tui [--template NAME] [--task TEXT] [--auto]\n       \
+                     amadeus-tui ask|rag|replay|doctor ..."
+                        .into(),
+                )
+            }
+            other => return Err(format!("unknown argument: {other}")),
+        }
+    }
+    Ok(l)
+}
+
+/// `replay [FILE]`: a readable transcript of a run log, the latest one for
+/// this workspace by default.
+pub fn replay(args: Vec<String>) -> i32 {
+    let path = match args.first() {
+        Some(p) => std::path::PathBuf::from(p),
+        None => {
+            let cfg = Config::from_env();
+            match runlog::latest(&cfg.runs_dir) {
+                Some(p) => p,
+                None => {
+                    eprintln!("no runs logged for {} yet", cfg.root.display());
+                    return 1;
+                }
+            }
+        }
+    };
+    match runlog::replay(&path) {
+        Ok(t) => {
+            println!("{}\n{t}", path.display());
+            0
+        }
+        Err(e) => {
+            eprintln!("{e}");
             1
         }
     }

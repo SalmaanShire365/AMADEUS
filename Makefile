@@ -33,7 +33,7 @@ tui: ## build and run the TUI (release)
 
 test: ## Rust tests + Python byte-compile check
 	cd $(TUI) && cargo test
-	$(PY) -m py_compile $(APP)/rag/rag.py $(APP)/rag/eval/run_eval.py $(APP)/agent/agent.py
+	$(PY) -m py_compile $(APP)/rag/rag.py $(APP)/rag/eval/run_eval.py
 
 lint: ## rustfmt check + clippy (warnings are errors)
 	cd $(TUI) && cargo fmt --check

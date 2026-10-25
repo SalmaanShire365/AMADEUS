@@ -52,7 +52,9 @@ impl std::fmt::Display for ChatError {
 
 pub enum Delta<'a> {
     Content(&'a str),
-    Thinking(&'a str),
+    /// Reasoning tokens, when a model thinks despite `think: false`. Only
+    /// the fact that it's thinking is surfaced; the text is in `Reply`.
+    Thinking,
 }
 
 #[derive(Debug, Default)]
@@ -156,7 +158,7 @@ pub fn chat(
         let m = &v["message"];
         if let Some(t) = m["thinking"].as_str().filter(|t| !t.is_empty()) {
             reply.thinking.push_str(t);
-            on_delta(Delta::Thinking(t));
+            on_delta(Delta::Thinking);
         }
         if let Some(c) = m["content"].as_str().filter(|c| !c.is_empty()) {
             reply.content.push_str(c);
@@ -222,6 +224,7 @@ pub fn capabilities(base_url: &str, model: &str) -> Result<Vec<String>, String> 
         .unwrap_or_default())
 }
 
+#[allow(dead_code)] // read by `amadeus doctor`, added in the next commit
 #[derive(Debug)]
 pub struct Loaded {
     pub name: String,
@@ -231,6 +234,7 @@ pub struct Loaded {
 
 /// Models currently loaded, from `/api/ps`. `size_vram < size` means part of
 /// the model spilled to CPU.
+#[allow(dead_code)] // used by `amadeus doctor`, added in the next commit
 pub fn ps(base_url: &str) -> Result<Vec<Loaded>, String> {
     let v = get(base_url, "/api/ps")?;
     Ok(v["models"]
@@ -254,10 +258,44 @@ pub fn is_pulled(pulled: &[String], wanted: &str) -> bool {
         .any(|p| p == wanted || (!wanted.contains(':') && p == &format!("{wanted}:latest")))
 }
 
+/// Read one whole HTTP request (headers plus Content-Length body). Test
+/// stubs must do this before replying: closing a socket with unread bytes
+/// sends RST, and the client can lose the response.
+#[cfg(test)]
+pub fn read_request(sock: &mut impl std::io::Read) -> (String, Vec<u8>) {
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    let (head_end, len) = loop {
+        let n = sock.read(&mut chunk).unwrap_or(0);
+        if n == 0 {
+            return (String::from_utf8_lossy(&buf).into(), Vec::new());
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        if let Some(p) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+            let head = String::from_utf8_lossy(&buf[..p]).to_lowercase();
+            let len = head
+                .lines()
+                .find_map(|l| l.strip_prefix("content-length:"))
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or(0);
+            break (p + 4, len);
+        }
+    };
+    while buf.len() < head_end + len {
+        let n = sock.read(&mut chunk).unwrap_or(0);
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
+    let head = String::from_utf8_lossy(&buf[..head_end]).to_string();
+    (head, buf[head_end..].to_vec())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{Read, Write};
+    use std::io::Write;
     use std::net::TcpListener;
     use std::time::Instant;
 
@@ -267,8 +305,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         thread::spawn(move || {
             if let Ok((mut sock, _)) = listener.accept() {
-                let mut buf = [0u8; 8192];
-                let _ = sock.read(&mut buf);
+                read_request(&mut sock);
                 let resp = format!(
                     "HTTP/1.1 {status}\r\nContent-Type: application/x-ndjson\r\n\
                      Connection: close\r\n\r\n{body}"

@@ -1,6 +1,6 @@
 [package]
 name = "amadeus"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Terminal UI front end for AMADEUS"
 
@@ -10,9 +10,15 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
+libc = "=0.2.189"
+pulldown-cmark = { version = "=0.13.5", default-features = false }
 ratatui = "0.29"
+serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "1"
+similar = "=3.2.1"
 textwrap = "0.16"
+toml = "=0.9.8"
+unicode-width = "=0.2.0"
 ureq = { version = "2.10", features = ["json"] }
 
 [profile.release]

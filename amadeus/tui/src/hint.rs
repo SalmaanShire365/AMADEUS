@@ -10,14 +10,54 @@ pub struct Cmd {
 
 pub const COMMANDS: &[Cmd] = &[
     Cmd {
+        name: "/new",
+        args: "",
+        help: "pick a task template",
+    },
+    Cmd {
+        name: "/use",
+        args: "<template>",
+        help: "switch template by name",
+    },
+    Cmd {
+        name: "/auto",
+        args: "",
+        help: "auto-approve the next task",
+    },
+    Cmd {
+        name: "/reset",
+        args: "",
+        help: "fresh conversation, same template",
+    },
+    Cmd {
+        name: "/chat",
+        args: "",
+        help: "plain chat, no tools",
+    },
+    Cmd {
+        name: "/log",
+        args: "",
+        help: "where the last task's audit log is",
+    },
+    Cmd {
+        name: "/help",
+        args: "",
+        help: "keys and commands (or ?)",
+    },
+    Cmd {
         name: "/rag",
         args: "<question>",
-        help: "codebase-grounded answer",
+        help: "answer from the indexed codebase",
     },
     Cmd {
         name: "/ask",
         args: "<task>",
         help: "ask the model with no retrieval",
+    },
+    Cmd {
+        name: "/agent",
+        args: "<task>",
+        help: "code-helper template on a task",
     },
     Cmd {
         name: "/index",
@@ -27,17 +67,12 @@ pub const COMMANDS: &[Cmd] = &[
     Cmd {
         name: "/file",
         args: "<path>",
-        help: "stage a file into the next prompt",
+        help: "stage a file into the next chat",
     },
     Cmd {
         name: "/shell",
         args: "<cmd>",
-        help: "run a command, output into scrollback",
-    },
-    Cmd {
-        name: "/agent",
-        args: "<task>",
-        help: "autonomous coding agent",
+        help: "run a command yourself",
     },
     Cmd {
         name: "/model",
@@ -45,14 +80,19 @@ pub const COMMANDS: &[Cmd] = &[
         help: "cycle fast / main / heavy",
     },
     Cmd {
+        name: "/debug",
+        args: "",
+        help: "show retrieval distances",
+    },
+    Cmd {
         name: "/history",
         args: "",
-        help: "show this session's history",
+        help: "show the chat history",
     },
     Cmd {
         name: "/clear",
         args: "",
-        help: "clear scrollback and history file",
+        help: "clear screen and history",
     },
     Cmd {
         name: "/quit",
@@ -61,13 +101,19 @@ pub const COMMANDS: &[Cmd] = &[
     },
 ];
 
+/// Commands worth suggesting to someone sitting idle. The rest (/clear,
+/// /quit, /index…) only show in the / menu.
+const IDLE: &[&str] = &["/new", "/use", "/auto", "/log", "/reset", "/rag", "/help"];
+
 /// Keybinding reminders, mixed into the idle rotation alongside unused commands.
 const TIPS: &[&str] = &[
+    "? shows every key and command",
     "ctrl+t cycles the model tier",
     "alt+enter inserts a newline, enter sends",
-    "pgup / pgdn scroll, end re-pins to the bottom",
-    "ctrl+c cancels a running answer",
-    "type / to see every command",
+    "up / down recall earlier inputs",
+    "pgup / pgdn or the mouse wheel scroll; end re-pins to the bottom",
+    "ctrl+c stops the current task",
+    "ctrl+o shows the model's reasoning, if it had any",
 ];
 
 /// How long after the last keystroke the bar stays out of the way.
@@ -142,7 +188,7 @@ pub fn hint(input: &str, since_key: Duration, idle_for: Duration, used: &HashSet
     if input.trim().is_empty() {
         let mut pool: Vec<String> = COMMANDS
             .iter()
-            .filter(|c| !used.contains(c.name))
+            .filter(|c| IDLE.contains(&c.name) && !used.contains(c.name))
             .map(usage)
             .collect();
         pool.extend(TIPS.iter().map(|t| t.to_string()));
@@ -191,7 +237,7 @@ mod tests {
             &none(),
         );
         match h {
-            Hint::Tip(t) => assert!(t.contains("grounded")),
+            Hint::Tip(t) => assert!(t.contains("indexed codebase")),
             other => panic!("expected usage, got {other:?}"),
         }
     }

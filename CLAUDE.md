@@ -1,6 +1,6 @@
 # AMADEUS
 
-Fully local AI coding assistant + codebase RAG. Everything runs through Ollama
+Fully local AI task harness + codebase RAG. Everything runs through Ollama
 on this machine (localhost:11434, RTX 5070). No API keys, no cloud.
 
 ## Layout
@@ -9,10 +9,11 @@ on this machine (localhost:11434, RTX 5070). No API keys, no cloud.
 amadeus/amadeus.sh       entry point: TUI by default, one-shot CLI subcommands
 amadeus/rag/rag.py       chunk -> embed (jina-embeddings-v2-base-code) -> sqlite-vec; query + rerank
 amadeus/rag/eval/        run_eval.py (recall@k, MRR) + fixtures.jsonl (query -> expected files)
-amadeus/tui/             Rust/ratatui front end (binary: amadeus-tui)
-amadeus/agent/agent.py   autonomous write/run loop behind `amadeus codex`
+amadeus/tui/             Rust/ratatui front end and agent loop (binary: amadeus-tui)
+amadeus/templates/       task templates (TOML) the agent loop runs
 amadeus/venv/            Python venv (gitignored); deps in rag/requirements.txt
-docs/                    GitHub Pages site (index.html)
+demo/workspace/          fictional sample files that `make demo` copies to a temp dir
+docs/                    GitHub Pages site (index.html), REVAMP.md plan
 ```
 
 ## Workspace (this machine)
@@ -39,6 +40,8 @@ docs/                    GitHub Pages site (index.html)
 
 ```
 make setup    venv + pip install + cargo fetch
+make models   pull the default main + fast models
+make demo     build, run the doctor, open the TUI on a fresh copy of demo/workspace
 make eval     retrieval eval against $AMADEUS_RAG_DATA_DIR (default ~/.amadeus-notest)
 make index    rebuild that index from ~/rag-corpus/gastown/internal
 make tui      cargo run --release
@@ -96,14 +99,15 @@ Measured 2026-10-14 when the fixtures grew 8 → 25. The old 8-query baseline wa
 ## Open problems
 
 1. **`DEF_RE` misses Go `type`/`struct`/`interface` declarations** (`amadeus-th1`), so those land
-   inside neighbouring chunks.
+   inside neighbouring chunks. Adding `type ` alone was tried 2026-10-14 and reverted (MRR
+   0.592 → 0.493): the boundary detaches the doc comment above it. Retry with boundaries moved up
+   to the start of the leading comment block, for `func` too.
 2. **Multi-concept dilution** (`hq-lgi`). "how are convoys stored in dolt" retrieves convoy code but
    not the storage layer; the embedding averages concepts. Already failed: lexical rerank, IDF
    weighting. Candidates: query decomposition, model reranker.
-3. **Standalone CLI** (`amadeus-wyd`). `amadeus.sh` resolves its home from the script path, the TUI
-   from `AMADEUS_HOME`; pick one rule for both.
-4. **README is missing the TUI** (`amadeus-7ba`), still says `rag/venv` (the code uses
-   `amadeus/venv`), and doesn't mention `qwen2.5-coder:1.5b` isn't pulled by default here.
-5. **Negative queries aren't scored** (`amadeus-8wi`). `rag/eval/fixtures_negative.jsonl` holds 4
+3. **Negative queries aren't scored** (`amadeus-8wi`). `rag/eval/fixtures_negative.jsonl` holds 4
    queries with no answer in the corpus; `run_eval.py` ignores them, so the CLI distance threshold
    is untested.
+4. **Template output accuracy** (no bead yet; Dolt was down when this was found). On the 2026-11-04
+   run, `draft-replies` broke the support policy in 2 of 3 replies and `notes-to-spreadsheet` invented
+   vendors. README "How well they work" has the list. There's no eval for this yet.

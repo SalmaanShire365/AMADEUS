@@ -199,8 +199,8 @@
           <li>Incremental re-indexing by file hash</li>
           <li>Grounded answers with file:line citations</li>
           <li>Evaluation harness reporting recall@k and MRR</li>
-          <li>Tiered model routing, 1.5B through 8B</li>
-          <li>Terminal UI (Rust, ratatui) with streaming answers and the execution agent wired in</li>
+          <li>Fast, main and heavy model tiers, switchable per task</li>
+          <li>Terminal UI (Rust, ratatui) with streaming answers, task templates and an agent loop that asks before every write or command</li>
         </ul>
       </div>
       <div class="col part">
@@ -370,6 +370,13 @@
         <h3>The benchmark grew, and the numbers came down</h3>
         <p>Eight questions was too few to trust, so it went to 25, each answer file chosen by reading the source, plus four questions with no answer in the corpus. Nothing in the retrieval code changed, and MRR fell from 0.812 to 0.592. The first eight questions were the easy ones. Three of the new ones find nothing in the top ten: in each case retrieval returns files that call the feature rather than the file that implements it. That failure is the clearest argument yet for indexing code structure, which is what Phase 1 is.</p>
         <div class="meta">25 questions · recall@1 0.380 · recall@5 0.720 · recall@10 0.800 · MRR 0.592</div>
+      </div>
+
+      <div class="item">
+        <time>14 OCT 2026</time>
+        <h3>A structural fix that made retrieval worse</h3>
+        <p>Go type declarations weren't treated as chunk boundaries, so structs ended up inside whatever function came before them. Adding them looked like an obvious fix for the three questions that find nothing. It wasn't. MRR fell from 0.592 to 0.493, eight questions got worse, one got better, and none of the three moved into the top ten. The split lands on the type line itself, which strands the comment describing the struct at the end of the previous chunk. One question went from first place to not found because its best chunk had been that comment and struct together. Reverted. The next attempt keeps each comment attached to the code it describes.</p>
+        <div class="meta">11,104 → 12,060 chunks · recall@1 0.380 → 0.280 · MRR 0.592 → 0.493 · reverted</div>
       </div>
 
       <div class="item">

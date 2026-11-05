@@ -9,10 +9,11 @@ on this machine (localhost:11434, RTX 5070). No API keys, no cloud.
 amadeus/amadeus.sh       entry point: TUI by default, one-shot CLI subcommands
 amadeus/rag/rag.py       chunk -> embed (jina-embeddings-v2-base-code) -> sqlite-vec; query + rerank
 amadeus/rag/eval/        run_eval.py (recall@k, MRR) + fixtures.jsonl (query -> expected files)
-amadeus/tui/             Rust/ratatui front end (binary: amadeus-tui)
-amadeus/agent/agent.py   autonomous write/run loop behind `amadeus codex`
+amadeus/tui/             Rust/ratatui front end and agent loop (binary: amadeus-tui)
+amadeus/templates/       task templates (TOML) the agent loop runs
 amadeus/venv/            Python venv (gitignored); deps in rag/requirements.txt
-docs/                    GitHub Pages site (index.html)
+demo/workspace/          fictional sample files that `make demo` copies to a temp dir
+docs/                    GitHub Pages site (index.html), REVAMP.md plan
 ```
 
 ## Workspace (this machine)
@@ -39,6 +40,8 @@ docs/                    GitHub Pages site (index.html)
 
 ```
 make setup    venv + pip install + cargo fetch
+make models   pull the default main + fast models
+make demo     build, run the doctor, open the TUI on a fresh copy of demo/workspace
 make eval     retrieval eval against $AMADEUS_RAG_DATA_DIR (default ~/.amadeus-notest)
 make index    rebuild that index from ~/rag-corpus/gastown/internal
 make tui      cargo run --release

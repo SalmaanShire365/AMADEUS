@@ -1,0 +1,12 @@
+From: Priya Raman <priya.r@example.com>
+Subject: Wrong tea in my order #QK-10482
+Date: 20 Oct 2026
+
+Hi there,
+
+I ordered two tins of the Smoky Lapsang but one of them is actually Jasmine Pearl.
+I don't really drink jasmine. Can I get the right one sent, or a refund for that tin?
+I've already opened the jasmine one before I noticed, sorry!
+
+Thanks,
+Priya

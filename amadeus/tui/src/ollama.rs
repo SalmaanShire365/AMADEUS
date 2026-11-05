@@ -1,16 +1,20 @@
 //! Ollama HTTP client: streaming `/api/chat` plus the small read-only
 //! endpoints the health check and doctor use.
 //!
-//! Cancel has to work while Ollama is still loading a model, when no bytes
-//! arrive for tens of seconds. So the HTTP read happens on its own thread and
-//! the caller waits on a channel with a short timeout, checking the cancel
-//! flag between waits. On cancel the caller returns at once; the reader
-//! thread notices the flag at its next line (or at the stall timeout), drops
-//! the connection, and Ollama stops generating.
+//! Cancel must stop generation on the server, not just stop listening. Two
+//! things make that hard. A cold model load sends no bytes for tens of
+//! seconds. And while a model writes a tool call, Ollama buffers it and
+//! sends nothing until the call is complete. A reader blocked in `read()`
+//! can't see a cancel flag in either case. So `/api/chat` uses a small
+//! HTTP/1.1 client over a `TcpStream` we keep a handle to. On cancel the
+//! socket is shut down, the blocked read returns at once, and Ollama sees
+//! the disconnect and stops. Measured: without this, a cancelled runaway
+//! turn kept the GPU busy and queued the next request behind it.
 
-use std::io::{BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, Read, Write};
+use std::net::{Shutdown, TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -62,6 +66,8 @@ pub struct Reply {
     pub content: String,
     pub thinking: String,
     pub tool_calls: Vec<Value>,
+    /// Generation stopped at `num_predict`, not because the model finished.
+    pub truncated: bool,
 }
 
 enum Msg {
@@ -77,6 +83,134 @@ fn agent(read_timeout: Duration) -> ureq::Agent {
         .build()
 }
 
+/// `http://host:port/prefix` → ("host:port", "/prefix").
+fn split_url(base: &str) -> Result<(String, String), String> {
+    let rest = base
+        .strip_prefix("http://")
+        .ok_or_else(|| format!("{base}: only http:// URLs are supported for Ollama"))?;
+    let (host, path) = match rest.find('/') {
+        Some(i) => (&rest[..i], rest[i..].trim_end_matches('/')),
+        None => (rest, ""),
+    };
+    let host = if host.contains(':') {
+        host.to_string()
+    } else {
+        format!("{host}:80")
+    };
+    Ok((host, path.to_string()))
+}
+
+/// Decodes `Transfer-Encoding: chunked`. Any error is fatal for the stream,
+/// so there's no partial state to resume.
+struct Chunked<R> {
+    inner: R,
+    left: usize,
+    done: bool,
+}
+
+impl<R: BufRead> Read for Chunked<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.done {
+            return Ok(0);
+        }
+        if self.left == 0 {
+            let mut size = String::new();
+            if self.inner.read_line(&mut size)? == 0 {
+                return Ok(0);
+            }
+            let hex = size.trim().split(';').next().unwrap_or("");
+            self.left = usize::from_str_radix(hex, 16)
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "bad chunk size"))?;
+            if self.left == 0 {
+                self.done = true;
+                return Ok(0);
+            }
+        }
+        let want = buf.len().min(self.left);
+        let n = self.inner.read(&mut buf[..want])?;
+        if n == 0 {
+            return Err(io::ErrorKind::UnexpectedEof.into());
+        }
+        self.left -= n;
+        if self.left == 0 {
+            let mut crlf = String::new();
+            self.inner.read_line(&mut crlf)?;
+        }
+        Ok(n)
+    }
+}
+
+/// POST `body` and return the response body as a line reader, with the
+/// socket stored in `handle` so another thread can shut it down.
+fn post_stream(
+    base: &str,
+    path: &str,
+    body: &[u8],
+    stall: Duration,
+    handle: &Mutex<Option<TcpStream>>,
+) -> Result<Box<dyn BufRead + Send>, ChatError> {
+    let (host, prefix) = split_url(base).map_err(ChatError::Unreachable)?;
+    let addr = host
+        .to_socket_addrs()
+        .map_err(|e| ChatError::Unreachable(e.to_string()))?
+        .next()
+        .ok_or_else(|| ChatError::Unreachable(format!("{host}: no address")))?;
+    let mut sock = TcpStream::connect_timeout(&addr, Duration::from_secs(5))
+        .map_err(|e| ChatError::Unreachable(e.to_string()))?;
+    let unreachable = |e: io::Error| ChatError::Unreachable(e.to_string());
+    sock.set_read_timeout(Some(stall)).map_err(unreachable)?;
+    *handle.lock().unwrap() = Some(sock.try_clone().map_err(unreachable)?);
+
+    let head = format!(
+        "POST {prefix}{path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    sock.write_all(head.as_bytes())
+        .and_then(|_| sock.write_all(body))
+        .map_err(unreachable)?;
+
+    let mut r = BufReader::new(sock);
+    let stream_err = |e: io::Error| ChatError::Stream(e.to_string());
+    let mut status = String::new();
+    r.read_line(&mut status).map_err(stream_err)?;
+    let code: u16 = status
+        .split_whitespace()
+        .nth(1)
+        .and_then(|c| c.parse().ok())
+        .ok_or_else(|| ChatError::Stream(format!("bad status line {status:?}")))?;
+    let mut chunked = false;
+    loop {
+        let mut h = String::new();
+        if r.read_line(&mut h).map_err(stream_err)? == 0 || h.trim().is_empty() {
+            break;
+        }
+        let h = h.to_ascii_lowercase();
+        if h.starts_with("transfer-encoding:") && h.contains("chunked") {
+            chunked = true;
+        }
+    }
+    let mut body: Box<dyn BufRead + Send> = if chunked {
+        Box::new(BufReader::new(Chunked {
+            inner: r,
+            left: 0,
+            done: false,
+        }))
+    } else {
+        Box::new(r)
+    };
+    if code != 200 {
+        let mut text = String::new();
+        let _ = body.read_to_string(&mut text);
+        let detail = serde_json::from_str::<Value>(&text)
+            .ok()
+            .and_then(|v| v["error"].as_str().map(str::to_string))
+            .unwrap_or(text);
+        return Err(ChatError::Status(code, detail.trim().into()));
+    }
+    Ok(body)
+}
+
 /// Stream one chat turn. `body` is the full `/api/chat` request; `stream` is
 /// forced on.
 pub fn chat(
@@ -86,33 +220,26 @@ pub fn chat(
     mut on_delta: impl FnMut(Delta),
 ) -> Result<Reply, ChatError> {
     body["stream"] = json!(true);
-    let url = format!("{}/api/chat", base_url.trim_end_matches('/'));
+    let base = base_url.trim_end_matches('/').to_string();
     let (tx, rx) = mpsc::channel::<Msg>();
+    let handle: Arc<Mutex<Option<TcpStream>>> = Arc::new(Mutex::new(None));
+    let h2 = handle.clone();
     let flag = cancel.clone();
     let stall = stall_timeout();
 
     thread::spawn(move || {
-        let resp = match agent(stall).post(&url).send_json(body) {
+        let bytes = body.to_string().into_bytes();
+        let mut reader = match post_stream(&base, "/api/chat", &bytes, stall, &h2) {
             Ok(r) => r,
-            Err(ureq::Error::Status(code, r)) => {
-                let detail = r.into_string().unwrap_or_default();
-                let detail = serde_json::from_str::<Value>(&detail)
-                    .ok()
-                    .and_then(|v| v["error"].as_str().map(str::to_string))
-                    .unwrap_or(detail);
-                let _ = tx.send(Msg::Fail(ChatError::Status(code, detail.trim().into())));
-                return;
-            }
             Err(e) => {
-                let _ = tx.send(Msg::Fail(ChatError::Unreachable(e.to_string())));
+                let _ = tx.send(Msg::Fail(e));
                 return;
             }
         };
-        let mut reader = BufReader::new(resp.into_reader());
         let mut line = String::new();
         loop {
             if flag.load(Ordering::Relaxed) {
-                return; // dropping the reader closes the connection
+                return;
             }
             line.clear();
             match reader.read_line(&mut line) {
@@ -133,9 +260,15 @@ pub fn chat(
         }
     });
 
+    let hang_up = || {
+        if let Some(s) = handle.lock().unwrap().take() {
+            let _ = s.shutdown(Shutdown::Both);
+        }
+    };
     let mut reply = Reply::default();
     loop {
         if cancel.load(Ordering::Relaxed) {
+            hang_up();
             return Err(ChatError::Cancelled);
         }
         let msg = match rx.recv_timeout(Duration::from_millis(100)) {
@@ -153,6 +286,7 @@ pub fn chat(
             Err(_) => continue,
         };
         if let Some(err) = v.get("error").and_then(Value::as_str) {
+            hang_up();
             return Err(ChatError::Model(err.to_string()));
         }
         let m = &v["message"];
@@ -168,6 +302,8 @@ pub fn chat(
             reply.tool_calls.extend(calls.iter().cloned());
         }
         if v["done"].as_bool().unwrap_or(false) {
+            reply.truncated = v["done_reason"] == "length";
+            hang_up();
             return Ok(reply);
         }
     }
@@ -224,7 +360,6 @@ pub fn capabilities(base_url: &str, model: &str) -> Result<Vec<String>, String> 
         .unwrap_or_default())
 }
 
-#[allow(dead_code)] // read by `amadeus doctor`, added in the next commit
 #[derive(Debug)]
 pub struct Loaded {
     pub name: String,
@@ -234,7 +369,6 @@ pub struct Loaded {
 
 /// Models currently loaded, from `/api/ps`. `size_vram < size` means part of
 /// the model spilled to CPU.
-#[allow(dead_code)] // used by `amadeus doctor`, added in the next commit
 pub fn ps(base_url: &str) -> Result<Vec<Loaded>, String> {
     let v = get(base_url, "/api/ps")?;
     Ok(v["models"]
@@ -295,7 +429,6 @@ pub fn read_request(sock: &mut impl std::io::Read) -> (String, Vec<u8>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
     use std::net::TcpListener;
     use std::time::Instant;
 
@@ -420,6 +553,77 @@ mod tests {
             "took {:?}",
             t.elapsed()
         );
+    }
+
+    #[test]
+    fn chunked_bodies_are_decoded() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        thread::spawn(move || {
+            if let Ok((mut sock, _)) = listener.accept() {
+                read_request(&mut sock);
+                let a = "{\"message\":{\"content\":\"Hel\"}}\n";
+                let b = "{\"message\":{\"content\":\"lo\"},\"done\":true}\n";
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{a}\r\n{:x}\r\n{b}\r\n0\r\n\r\n",
+                    a.len(),
+                    b.len()
+                );
+                let _ = sock.write_all(resp.as_bytes());
+            }
+        });
+        let (text, r) = run(port);
+        assert_eq!(text, "Hello");
+        assert!(r.is_ok());
+    }
+
+    #[test]
+    fn cancel_hangs_up_so_the_server_stops() {
+        // A server that streams nothing (a tool call being buffered) and
+        // reports when the client disconnects.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (gone_tx, gone_rx) = mpsc::channel();
+        thread::spawn(move || {
+            if let Ok((mut sock, _)) = listener.accept() {
+                read_request(&mut sock);
+                let _ = sock.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n");
+                let mut buf = [0u8; 1];
+                // Blocks until the client closes its end.
+                let _ = sock.read(&mut buf);
+                let _ = gone_tx.send(());
+            }
+        });
+        let cancel = Arc::new(AtomicBool::new(false));
+        let c2 = cancel.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(200));
+            c2.store(true, Ordering::Relaxed);
+        });
+        let r = chat(
+            &format!("http://127.0.0.1:{port}"),
+            json!({}),
+            &cancel,
+            |_| {},
+        );
+        assert_eq!(r.unwrap_err(), ChatError::Cancelled);
+        assert!(
+            gone_rx.recv_timeout(Duration::from_secs(2)).is_ok(),
+            "server never saw the disconnect"
+        );
+    }
+
+    #[test]
+    fn urls_split_into_host_and_prefix() {
+        assert_eq!(
+            split_url("http://localhost:11434").unwrap(),
+            ("localhost:11434".into(), "".into())
+        );
+        assert_eq!(
+            split_url("http://box/ollama/").unwrap(),
+            ("box:80".into(), "/ollama".into())
+        );
+        assert!(split_url("https://x").is_err());
     }
 
     #[test]

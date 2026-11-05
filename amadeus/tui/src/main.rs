@@ -2,6 +2,7 @@ mod agent;
 mod app;
 mod approval;
 mod cli;
+mod doctor;
 mod event;
 mod health;
 mod hint;
@@ -47,6 +48,7 @@ fn main() -> Result<()> {
         Some("ask") => std::process::exit(cli::ask(args.split_off(1))),
         Some("rag") => std::process::exit(cli::rag(args.split_off(1))),
         Some("replay") => std::process::exit(cli::replay(args.split_off(1))),
+        Some("doctor") => std::process::exit(doctor::run(args.split_off(1))),
         _ => {}
     }
     let launch = match cli::launch(args) {

@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use crate::app::chat_body;
-use crate::approval::{Decision, Gate};
+use crate::approval::{Gate, Verdict};
 use crate::event::AppEvent;
 use crate::ollama::{self, ChatError, Delta};
 use crate::render;
@@ -44,6 +44,15 @@ pub fn num_ctx() -> u64 {
         .unwrap_or(8192)
 }
 
+/// Most tokens one model turn may generate. 3k covers a full CSV, summary or
+/// drafted reply; it exists to stop runaway turns.
+pub fn num_predict() -> u64 {
+    std::env::var("AMADEUS_NUM_PREDICT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(3072)
+}
+
 pub fn system_prompt(t: &Template, root: &std::path::Path) -> String {
     format!(
         "{}\n\n\
@@ -68,7 +77,7 @@ fn native(calls: &[Call]) -> Value {
     )
 }
 
-fn wait_for(rx: &mpsc::Receiver<Decision>, cancel: &AtomicBool) -> Option<Decision> {
+fn wait_for(rx: &mpsc::Receiver<Verdict>, cancel: &AtomicBool) -> Option<Verdict> {
     loop {
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(d) => return Some(d),
@@ -108,6 +117,10 @@ pub fn run(spec: RunSpec, id: u64, tx: Sender<AppEvent>, cancel: Arc<AtomicBool>
 
     let mut steps = 0;
     let mut answer = String::new();
+    // Exact calls the user already declined. Small models re-propose the
+    // same write after a plain "no" (seen live with qwen3:8b); asking again
+    // would loop until the step limit.
+    let mut declined: Vec<String> = Vec::new();
     let end = 'run: loop {
         if steps >= t.max_steps {
             break End::OutOfSteps;
@@ -115,13 +128,12 @@ pub fn run(spec: RunSpec, id: u64, tx: Sender<AppEvent>, cancel: Arc<AtomicBool>
         steps += 1;
 
         let started = Instant::now();
-        let mut body = chat_body(
+        let body = chat_body(
             &spec.url,
             &spec.model,
             messages.clone(),
             Some(schema.clone()),
         );
-        body["options"]["num_ctx"] = json!(num_ctx());
         let reply = ollama::chat(&spec.url, body, &cancel, |d| {
             if let Delta::Content(c) = d {
                 let _ = tx.send(AppEvent::Token {
@@ -148,8 +160,19 @@ pub fn run(spec: RunSpec, id: u64, tx: Sender<AppEvent>, cancel: Arc<AtomicBool>
             json!({
                 "step": steps, "duration_ms": started.elapsed().as_millis() as u64,
                 "content": content, "tool_calls": native(&calls), "calls_parsed_from_text": in_text,
+                "truncated": reply.truncated,
             }),
         );
+
+        if reply.truncated {
+            let _ = tx.send(AppEvent::Note {
+                id,
+                text: format!(
+                    "the model's reply hit the {}-token cap (AMADEUS_NUM_PREDICT) and was cut off",
+                    num_predict()
+                ),
+            });
+        }
 
         if calls.is_empty() {
             let _ = tx.send(AppEvent::TurnEnd { id, keep: true });
@@ -197,6 +220,27 @@ pub fn run(spec: RunSpec, id: u64, tx: Sender<AppEvent>, cancel: Arc<AtomicBool>
                 continue;
             };
 
+            let fingerprint = format!("{}{}", call.name, call.args);
+            if ts.needs_approval && declined.contains(&fingerprint) {
+                let msg = "already declined, not asked again".to_string();
+                let _ = tx.send(AppEvent::Tool {
+                    id,
+                    headline,
+                    summary: msg.clone(),
+                    ok: false,
+                });
+                log.log(
+                    "tool_result",
+                    json!({"name": call.name, "ok": false, "summary": msg}),
+                );
+                messages.push(result(
+                    "You proposed this exact call before and the user declined it. Do not try it \
+                     again. Stop and reply with what you would change, or ask the user what they want."
+                        .into(),
+                ));
+                continue;
+            }
+
             if gate.must_ask(ts.needs_approval) {
                 let preview = match tools::preview(&ws, &call) {
                     Ok(p) => p,
@@ -222,29 +266,51 @@ pub fn run(spec: RunSpec, id: u64, tx: Sender<AppEvent>, cancel: Arc<AtomicBool>
                     body: preview.body,
                     reply: rtx,
                 });
-                let Some(d) = wait_for(&rrx, &cancel) else {
+                let Some(v) = wait_for(&rrx, &cancel) else {
                     log.log(
                         "approval",
                         json!({"decision": "cancelled", "headline": headline}),
                     );
                     break 'run End::Cancelled;
                 };
+                let d = v.decision;
                 gate.record(d);
+                let note = v
+                    .note
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|n| !n.is_empty())
+                    .map(str::to_string);
                 log.log(
                     "approval",
-                    json!({"decision": d.label(), "headline": headline}),
+                    json!({"decision": d.label(), "headline": headline, "note": note}),
                 );
                 if !d.allows() {
+                    declined.push(fingerprint);
+                    let (summary, told) = match &note {
+                        Some(n) => (
+                            format!("declined: {n}"),
+                            format!(
+                                "The user declined this {} call and said: \"{n}\". It was not run. \
+                                 Fix that and propose the corrected call.",
+                                call.name
+                            ),
+                        ),
+                        None => (
+                            "declined, not run".to_string(),
+                            format!(
+                                "The user declined this {} call. It was not run. Do not repeat it.",
+                                call.name
+                            ),
+                        ),
+                    };
                     let _ = tx.send(AppEvent::Tool {
                         id,
                         headline,
-                        summary: "declined, not run".into(),
+                        summary,
                         ok: false,
                     });
-                    messages.push(result(format!(
-                        "The user declined this {} call. It was not run. Do not repeat it.",
-                        call.name
-                    )));
+                    messages.push(result(told));
                     continue;
                 }
             } else if ts.needs_approval {
@@ -308,6 +374,7 @@ pub fn run(spec: RunSpec, id: u64, tx: Sender<AppEvent>, cancel: Arc<AtomicBool>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::approval::Decision;
     use crate::templates;
     use std::collections::VecDeque;
     use std::fs;
@@ -376,6 +443,16 @@ mod tests {
         answer: Decision,
         auto: bool,
     ) -> Ran {
+        run_with_note(tag, tools, replies, Verdict::of(answer), auto)
+    }
+
+    fn run_with_note(
+        tag: &str,
+        tools: &[&str],
+        replies: Vec<Value>,
+        answer: Verdict,
+        auto: bool,
+    ) -> Ran {
         let ws = std::env::temp_dir().join(format!("amadeus-agent-{tag}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&ws);
         fs::create_dir_all(&ws).unwrap();
@@ -402,7 +479,7 @@ mod tests {
                 AppEvent::Approval { reply, title, .. } => {
                     approvals += 1;
                     events.push(format!("approval: {title}"));
-                    reply.send(answer).unwrap();
+                    reply.send(answer.clone()).unwrap();
                 }
                 AppEvent::Tool {
                     headline,
@@ -526,6 +603,61 @@ mod tests {
         let tool_msg = r.messages.iter().find(|m| m["role"] == "tool").unwrap();
         assert!(tool_msg["content"].as_str().unwrap().contains("declined"));
         assert!(r.log.contains("\"decision\":\"declined\""));
+        let _ = fs::remove_dir_all(r.ws);
+    }
+
+    #[test]
+    fn a_repeated_declined_call_is_refused_without_asking() {
+        let write = call("write_file", json!({"path": "x.md", "content": "x"}));
+        let r = run_with(
+            "repeat",
+            &["write_file"],
+            vec![
+                write.clone(),
+                write,
+                json!({"content": "What should I change?"}),
+            ],
+            Decision::Deny,
+            false,
+        );
+        assert_eq!(r.approvals, 1, "{:?}", r.events);
+        assert!(
+            r.events.iter().any(|e| e.contains("already declined")),
+            "{:?}",
+            r.events
+        );
+        assert_eq!(r.events.last().unwrap(), "done");
+        let _ = fs::remove_dir_all(r.ws);
+    }
+
+    #[test]
+    fn a_decline_note_reaches_the_model() {
+        let r = run_with_note(
+            "note",
+            &["write_file"],
+            vec![
+                call("write_file", json!({"path": "x.csv", "content": "a,Theo"})),
+                json!({"content": "ok"}),
+            ],
+            Verdict {
+                decision: Decision::Deny,
+                note: Some("leave paid_by empty".into()),
+            },
+            false,
+        );
+        let tool_msg = r.messages.iter().find(|m| m["role"] == "tool").unwrap();
+        assert!(tool_msg["content"]
+            .as_str()
+            .unwrap()
+            .contains("leave paid_by empty"));
+        assert!(
+            r.events
+                .iter()
+                .any(|e| e.contains("declined: leave paid_by empty")),
+            "{:?}",
+            r.events
+        );
+        assert!(r.log.contains("\"note\":\"leave paid_by empty\""));
         let _ = fs::remove_dir_all(r.ws);
     }
 

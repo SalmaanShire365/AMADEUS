@@ -14,7 +14,7 @@ use ratatui::crossterm::event::{
 use serde_json::{json, Value};
 
 use crate::agent::{self, RunSpec};
-use crate::approval::Decision;
+use crate::approval::{Decision, Verdict};
 use crate::event::AppEvent;
 use crate::health::{self, Health, Status};
 use crate::hint;
@@ -122,11 +122,20 @@ fn env_or(key: &str, default: &str) -> String {
 /// Request body for one chat turn. `think: false` goes only to models that
 /// advertise thinking; any `<think>` that still leaks into content is folded
 /// by the renderer.
+///
+/// Every request carries the same `num_ctx`. Ollama reloads a model whenever
+/// it changes, and the default differs by version (16k on 0.40), so a chat
+/// followed by a task would otherwise reload, and spill to CPU, each time.
+/// `num_predict` caps one turn so a runaway generation can't hold the GPU.
 pub fn chat_body(url: &str, model: &str, messages: Vec<Value>, tools: Option<Value>) -> Value {
     let mut body = json!({
         "model": model,
         "messages": messages,
-        "options": { "temperature": 0.2 },
+        "options": {
+            "temperature": 0.2,
+            "num_ctx": agent::num_ctx(),
+            "num_predict": agent::num_predict(),
+        },
     });
     let thinks = ollama::capabilities(url, model)
         .map(|c| c.iter().any(|x| x == "thinking"))
@@ -145,7 +154,9 @@ pub struct Pending {
     pub title: String,
     pub body: String,
     pub scroll: usize,
-    reply: Sender<Decision>,
+    /// Some while the user types why they're declining (after `n`).
+    pub note: Option<String>,
+    reply: Sender<Verdict>,
 }
 
 /// Options from the command line (`amadeus agent`, `make demo`).
@@ -188,6 +199,8 @@ pub struct App {
     pub picker: Option<usize>,
     pub show_help: bool,
     pub last_log: Option<PathBuf>,
+    /// Tool calls in the agent run in flight; None for chat, /rag, /shell.
+    run_tools: Option<usize>,
 
     next_id: u64,
     pub cancel: Arc<AtomicBool>,
@@ -230,6 +243,7 @@ impl App {
             picker: None,
             show_help: false,
             last_log: None,
+            run_tools: None,
             next_id: 0,
             cancel: Arc::new(AtomicBool::new(false)),
             response: String::new(),
@@ -315,6 +329,7 @@ impl App {
     }
 
     fn end_busy(&mut self) {
+        self.run_tools = None;
         self.busy = None;
         self.busy_since = None;
         self.pending = None;
@@ -323,6 +338,18 @@ impl App {
     }
 
     fn finish(&mut self) {
+        if let (Some(n), Some(t)) = (self.run_tools, self.busy_since) {
+            if !self.cancel.load(Ordering::Relaxed) {
+                let noun = if n == 1 { "step" } else { "steps" };
+                self.push(
+                    Kind::System,
+                    format!(
+                        "finished in {}s · {n} tool {noun} · /log shows the audit trail",
+                        t.elapsed().as_secs()
+                    ),
+                );
+            }
+        }
         let answer = render::strip_think(&self.response);
         if !answer.is_empty() && self.template.is_none() {
             self.write_history(&self.last_user.clone(), &answer);
@@ -391,6 +418,7 @@ impl App {
                         title,
                         body,
                         scroll: 0,
+                        note: None,
                         reply,
                     });
                 }
@@ -403,6 +431,9 @@ impl App {
             } => {
                 if self.busy == Some(id) {
                     self.sb.close_live();
+                    if let Some(n) = self.run_tools.as_mut() {
+                        *n += 1;
+                    }
                     let mark = if ok { "" } else { "✗ " };
                     self.push(Kind::Tool, format!("{headline}\n{mark}{summary}"));
                 }
@@ -496,7 +527,9 @@ impl App {
                 }
             }
             Event::Paste(s) => {
-                if self.pending.is_none() && self.picker.is_none() {
+                if let Some(note) = self.pending.as_mut().and_then(|p| p.note.as_mut()) {
+                    note.push_str(&s.replace(['\r', '\n'], " "));
+                } else if self.pending.is_none() && self.picker.is_none() {
                     self.last_key = Instant::now();
                     self.insert_str(&s.replace("\r\n", "\n").replace('\r', "\n"));
                 }
@@ -555,29 +588,55 @@ impl App {
     }
 
     fn on_approval_key(&mut self, k: KeyEvent) {
+        let Some(p) = self.pending.as_mut() else {
+            return;
+        };
+
+        // After `n`: an optional one-line reason, sent to the model.
+        if let Some(note) = p.note.as_mut() {
+            match k.code {
+                KeyCode::Enter => {
+                    let n = std::mem::take(note);
+                    self.decide(Decision::Deny, Some(n));
+                }
+                KeyCode::Esc => self.decide(Decision::Deny, None),
+                KeyCode::Backspace => {
+                    note.pop();
+                }
+                KeyCode::Char(c) => note.push(c),
+                _ => {}
+            }
+            return;
+        }
+
         match k.code {
             KeyCode::PageDown | KeyCode::Down => {
-                if let Some(p) = self.pending.as_mut() {
-                    p.scroll += if k.code == KeyCode::Down { 1 } else { 10 };
-                }
+                p.scroll += if k.code == KeyCode::Down { 1 } else { 10 };
             }
             KeyCode::PageUp | KeyCode::Up => {
-                if let Some(p) = self.pending.as_mut() {
-                    p.scroll = p
-                        .scroll
-                        .saturating_sub(if k.code == KeyCode::Up { 1 } else { 10 });
-                }
+                p.scroll = p
+                    .scroll
+                    .saturating_sub(if k.code == KeyCode::Up { 1 } else { 10 });
             }
+            KeyCode::Char('n') | KeyCode::Char('N') => p.note = Some(String::new()),
             code => {
                 if let Some(d) = Decision::from_key(code) {
-                    if let Some(p) = self.pending.take() {
-                        let mark = if d.allows() { "✓" } else { "✗" };
-                        self.push(Kind::System, format!("{mark} {}: {}", d.label(), p.title));
-                        let _ = p.reply.send(d);
-                    }
+                    self.decide(d, None);
                 }
             }
         }
+    }
+
+    fn decide(&mut self, d: Decision, note: Option<String>) {
+        let Some(p) = self.pending.take() else { return };
+        let note = note.filter(|n| !n.trim().is_empty());
+        let mark = if d.allows() { "✓" } else { "✗" };
+        let why = note.as_ref().map(|n| format!(" ({n})")).unwrap_or_default();
+        self.push(
+            Kind::System,
+            format!("{mark} {}: {}{why}", d.label(), p.title),
+        );
+        let _ = p.reply.send(Verdict { decision: d, note });
     }
 
     fn on_picker_key(&mut self, k: KeyEvent) {
@@ -968,6 +1027,7 @@ impl App {
             return;
         };
         let id = self.begin();
+        self.run_tools = Some(0);
         self.last_user = task.clone();
         let auto = std::mem::take(&mut self.auto_next);
         if auto {
@@ -1100,10 +1160,12 @@ impl App {
     // ---------- view helpers ----------
 
     pub fn hint(&self) -> hint::Hint {
-        if self.pending.is_some() {
-            return hint::Hint::Tip(
-                "review the change above: y approve · n skip · a approve the rest".into(),
-            );
+        if let Some(p) = &self.pending {
+            return hint::Hint::Tip(if p.note.is_some() {
+                "type what should change, enter to send · esc skips without a reason".into()
+            } else {
+                "review the change: y approve · n skip and say why · a approve the rest".into()
+            });
         }
         if self.busy.is_some() && self.input.is_empty() {
             return hint::Hint::Tip("working… ctrl+c stops it".into());
@@ -1451,30 +1513,63 @@ mod tests {
         assert_eq!(t[t.len() - 1], (Kind::Agent, "Summary".into()));
     }
 
+    fn approval(a: &mut App) -> mpsc::Receiver<Verdict> {
+        let id = a.begin();
+        let (rtx, rrx) = mpsc::channel();
+        a.handle(AppEvent::Approval {
+            id,
+            title: "create x.md".into(),
+            body: "+hi".into(),
+            reply: rtx,
+        });
+        rrx
+    }
+
     #[test]
     fn approval_keys_reach_the_agent_and_never_the_input() {
-        for (k, want) in [
-            ('y', Decision::Approve),
-            ('n', Decision::Deny),
-            ('a', Decision::ApproveRest),
-        ] {
+        for (k, want) in [('y', Decision::Approve), ('a', Decision::ApproveRest)] {
             let mut a = app();
-            let id = a.begin();
-            let (rtx, rrx) = mpsc::channel();
-            a.handle(AppEvent::Approval {
-                id,
-                title: "create x.md".into(),
-                body: "+hi".into(),
-                reply: rtx,
-            });
+            let rrx = approval(&mut a);
             press(&mut a, 'z'); // ignored
             assert!(a.pending.is_some());
             press(&mut a, k);
-            assert_eq!(rrx.try_recv().unwrap(), want);
+            assert_eq!(rrx.try_recv().unwrap(), Verdict::of(want));
             assert!(a.pending.is_none());
             assert!(a.input.is_empty(), "approval keys must not be typed");
             assert!(texts(&a).last().unwrap().1.contains("create x.md"));
         }
+    }
+
+    #[test]
+    fn n_asks_why_and_sends_the_reason() {
+        let mut a = app();
+        let rrx = approval(&mut a);
+        press(&mut a, 'n');
+        assert!(
+            rrx.try_recv().is_err(),
+            "nothing sent until the reason is done"
+        );
+        for c in "no names".chars() {
+            press(&mut a, c);
+        }
+        a.handle(key(KeyCode::Enter, KeyModifiers::NONE));
+        let v = rrx.try_recv().unwrap();
+        assert_eq!(v.decision, Decision::Deny);
+        assert_eq!(v.note.as_deref(), Some("no names"));
+        assert!(a.input.is_empty());
+        assert!(texts(&a).last().unwrap().1.ends_with("(no names)"));
+    }
+
+    #[test]
+    fn esc_declines_without_a_reason() {
+        let mut a = app();
+        let rrx = approval(&mut a);
+        a.handle(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(rrx.try_recv().unwrap(), Verdict::of(Decision::Deny));
+        let rrx = approval(&mut a);
+        press(&mut a, 'n');
+        a.handle(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(rrx.try_recv().unwrap(), Verdict::of(Decision::Deny));
     }
 
     #[test]

@@ -3,6 +3,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{layout_input, App};
 use crate::health::Status;
@@ -100,18 +101,38 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(line), area);
 }
 
-/// A box anchored to the bottom of `area`, full width minus a margin.
+/// A full-width box anchored to the bottom of `area`. Full width so no
+/// scrollback gutter shows down its side.
 fn bottom_box(area: Rect, height: u16) -> Rect {
     let h = height.min(area.height);
     Rect {
-        x: area.x + 1,
+        x: area.x,
         y: area.y + area.height - h,
-        width: area.width.saturating_sub(2),
+        width: area.width,
         height: h,
     }
 }
 
-fn diff_line(l: &str) -> Line<'static> {
+/// Cut to `w` columns, marking the cut with `…`.
+fn clip(s: &str, w: usize) -> String {
+    if s.width() <= w {
+        return s.to_string();
+    }
+    let mut out = String::new();
+    let mut used = 0;
+    for ch in s.chars() {
+        let cw = ch.width().unwrap_or(0);
+        if used + cw + 1 > w {
+            break;
+        }
+        out.push(ch);
+        used += cw;
+    }
+    out.push('…');
+    out
+}
+
+fn diff_line(l: &str, w: usize) -> Line<'static> {
     let st = if l.starts_with("+++") || l.starts_with("---") || l.starts_with("@@") {
         theme::dim()
     } else if l.starts_with('+') {
@@ -123,7 +144,7 @@ fn diff_line(l: &str) -> Line<'static> {
     } else {
         Style::default()
     };
-    Line::from(Span::styled(l.replace('\t', "    "), st))
+    Line::from(Span::styled(clip(&l.replace('\t', "    "), w), st))
 }
 
 fn draw_approval(f: &mut Frame, app: &mut App, area: Rect) {
@@ -131,8 +152,10 @@ fn draw_approval(f: &mut Frame, app: &mut App, area: Rect) {
         return;
     };
     let lines: Vec<&str> = p.body.lines().collect();
+    let inner_w = area.width.saturating_sub(2) as usize;
     let max_h = (area.height as usize * 3 / 4).max(6);
-    let room = max_h.saturating_sub(5).max(1);
+    let extra = if p.note.is_some() { 7 } else { 5 };
+    let room = max_h.saturating_sub(extra).max(1);
     let max_scroll = lines.len().saturating_sub(room);
     p.scroll = p.scroll.min(max_scroll);
 
@@ -140,7 +163,13 @@ fn draw_approval(f: &mut Frame, app: &mut App, area: Rect) {
         Line::from(Span::styled(p.title.clone(), theme::bold())),
         Line::default(),
     ];
-    body.extend(lines.iter().skip(p.scroll).take(room).map(|l| diff_line(l)));
+    body.extend(
+        lines
+            .iter()
+            .skip(p.scroll)
+            .take(room)
+            .map(|l| diff_line(l, inner_w)),
+    );
     let hidden = lines.len().saturating_sub(p.scroll + room);
     if hidden > 0 || p.scroll > 0 {
         body.push(Line::from(Span::styled(
@@ -148,18 +177,36 @@ fn draw_approval(f: &mut Frame, app: &mut App, area: Rect) {
             theme::dim_italic(),
         )));
     }
+    let typing = p.note.clone();
+    if let Some(n) = &typing {
+        body.push(Line::default());
+        body.push(Line::from(vec![
+            Span::styled("what should change? ", theme::bold()),
+            Span::raw(n.clone()),
+            Span::styled("▏", theme::accent()),
+        ]));
+    }
 
     let h = (body.len() + 2) as u16;
     let rect = bottom_box(area, h);
-    let keys = Line::from(vec![
-        Span::styled(" y ", theme::reversed()),
-        Span::raw(" approve  "),
-        Span::styled(" n ", theme::reversed()),
-        Span::raw(" skip  "),
-        Span::styled(" a ", theme::reversed()),
-        Span::raw(" approve all for this task  "),
-        Span::styled("ctrl+c stop ", theme::dim()),
-    ]);
+    let keys = if typing.is_some() {
+        Line::from(vec![
+            Span::styled(" enter ", theme::reversed()),
+            Span::raw(" send the reason and skip  "),
+            Span::styled(" esc ", theme::reversed()),
+            Span::raw(" skip without a reason "),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled(" y ", theme::reversed()),
+            Span::raw(" approve  "),
+            Span::styled(" n ", theme::reversed()),
+            Span::raw(" skip and say why  "),
+            Span::styled(" a ", theme::reversed()),
+            Span::raw(" approve the rest of this task  "),
+            Span::styled("ctrl+c stop ", theme::dim()),
+        ])
+    };
     f.render_widget(Clear, rect);
     f.render_widget(
         Paragraph::new(body).block(
@@ -192,10 +239,13 @@ fn draw_picker(f: &mut Frame, app: &App, area: Rect) {
             Span::styled(t.title.clone(), st),
             Span::styled(format!("  /use {}", t.name), theme::dim()),
         ]));
-        lines.push(Line::from(Span::styled(
-            format!("     {}", t.description),
-            theme::dim(),
-        )));
+        let wrap_w = (area.width as usize).saturating_sub(8).max(20);
+        for row in textwrap::wrap(&t.description, wrap_w) {
+            lines.push(Line::from(Span::styled(
+                format!("     {row}"),
+                theme::dim(),
+            )));
+        }
     }
     let rect = bottom_box(area, (lines.len() + 2) as u16);
     f.render_widget(Clear, rect);

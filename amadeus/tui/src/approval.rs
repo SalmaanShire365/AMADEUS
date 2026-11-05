@@ -4,8 +4,29 @@
 //! unless the run started with auto-approve or the user answered "a"
 //! (approve this and the rest of the run) earlier in the same run. The next
 //! run starts asking again.
+//!
+//! A decline can carry a note ("paid_by should be empty unless a name is
+//! given"), which goes back to the model so it can try again differently.
 
 use ratatui::crossterm::event::KeyCode;
+
+/// What the UI sends back to a blocked agent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Verdict {
+    pub decision: Decision,
+    /// Why it was declined, when the user said.
+    pub note: Option<String>,
+}
+
+impl Verdict {
+    #[cfg(test)]
+    pub fn of(decision: Decision) -> Verdict {
+        Verdict {
+            decision,
+            note: None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Decision {

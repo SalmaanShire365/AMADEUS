@@ -9,8 +9,12 @@ TUI    := $(APP)/tui
 DATA   ?= $(or $(AMADEUS_RAG_DATA_DIR),$(HOME)/.amadeus-notest)
 CORPUS ?= $(HOME)/rag-corpus/gastown/internal
 
+# `make demo` runs on a fresh copy of demo/workspace so every rehearsal starts
+# clean and the repo never collects demo output.
+DEMO_DIR ?= $(or $(TMPDIR),/tmp)/amadeus-demo
+
 .DEFAULT_GOAL := help
-.PHONY: help setup eval index tui test lint check
+.PHONY: help setup models demo eval index tui test lint check
 
 help: ## list targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  make %-7s %s\n", $$1, $$2}'
@@ -19,6 +23,21 @@ setup: ## create the venv, install Python deps, fetch Rust deps
 	test -x $(PY) || python3 -m venv $(VENV)
 	$(PY) -m pip install -q -r $(APP)/rag/requirements.txt
 	cd $(TUI) && cargo fetch
+
+models: ## pull the default main + fast models (about 8 GB, once)
+	ollama pull $(or $(AMADEUS_MAIN_MODEL),qwen3:8b)
+	ollama pull $(or $(AMADEUS_FAST_MODEL),qwen3:4b-instruct)
+
+demo: ## build, run the doctor, open the TUI on a fresh copy of demo/workspace
+	cd $(TUI) && cargo build --release --quiet
+	$(APP)/amadeus.sh doctor
+	@if [ -e "$(DEMO_DIR)" ]; then \
+		grep -qs "Quill & Kettle" "$(DEMO_DIR)/README.txt" || \
+			{ echo "$(DEMO_DIR) exists and isn't a demo copy; refusing to replace it (set DEMO_DIR)"; exit 1; }; \
+		rm -rf "$(DEMO_DIR)"; \
+	fi
+	cp -R demo/workspace "$(DEMO_DIR)"
+	cd "$(DEMO_DIR)" && $(abspath $(APP))/amadeus.sh
 
 eval: ## retrieval eval (recall@k, MRR) against $(DATA)
 	@test -f $(DATA)/index.db || { echo "no index at $(DATA) — run: make index"; exit 1; }

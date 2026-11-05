@@ -6,7 +6,7 @@ use std::time::Duration;
 use ratatui::crossterm::event::{self, Event};
 use serde_json::Value;
 
-use crate::approval::Decision;
+use crate::approval::Verdict;
 use crate::health::Health;
 
 /// Everything that can wake the main loop. The UI thread never blocks on
@@ -36,7 +36,7 @@ pub enum AppEvent {
         id: u64,
         title: String,
         body: String,
-        reply: Sender<Decision>,
+        reply: Sender<Verdict>,
     },
     /// A tool call finished (or was declined).
     Tool {

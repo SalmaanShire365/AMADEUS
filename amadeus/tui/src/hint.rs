@@ -101,6 +101,10 @@ pub const COMMANDS: &[Cmd] = &[
     },
 ];
 
+/// Commands worth suggesting to someone sitting idle. The rest (/clear,
+/// /quit, /index…) only show in the / menu.
+const IDLE: &[&str] = &["/new", "/use", "/auto", "/log", "/reset", "/rag", "/help"];
+
 /// Keybinding reminders, mixed into the idle rotation alongside unused commands.
 const TIPS: &[&str] = &[
     "? shows every key and command",
@@ -184,7 +188,7 @@ pub fn hint(input: &str, since_key: Duration, idle_for: Duration, used: &HashSet
     if input.trim().is_empty() {
         let mut pool: Vec<String> = COMMANDS
             .iter()
-            .filter(|c| !used.contains(c.name))
+            .filter(|c| IDLE.contains(&c.name) && !used.contains(c.name))
             .map(usage)
             .collect();
         pool.extend(TIPS.iter().map(|t| t.to_string()));

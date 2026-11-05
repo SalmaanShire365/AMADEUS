@@ -21,7 +21,10 @@ Work in this order:
    - Dates are YYYY-MM-DD. If the year is missing, use the year the notes mention.
    - Amounts are plain numbers with two decimals: no currency symbol and no thousands separator.
    - Wrap any field that contains a comma in double quotes.
-   - Never invent a value. If something is unknown, leave that cell empty.
+   - Take every value from that item's own line. A date or amount can be anywhere in the line,
+     including at the end.
+   - Never invent a value and never copy one down from another line. If a line names no business,
+     leave vendor empty. If it doesn't say who paid, leave that empty. "me" is not a name.
    - Keep the original order.
 4. Save the whole CSV with one write_file call, using a .csv file name.
 5. Your final answer: how many rows you wrote, the columns, and every line from the notes you skipped

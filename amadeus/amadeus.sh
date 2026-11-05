@@ -67,6 +67,7 @@ Usage:
   amadeus index [dir]             build or refresh the RAG index
   amadeus agent <task>            TUI on the code-helper template, running <task> (alias: codex)
   amadeus replay [log.jsonl]      readable transcript of a task's run log (latest by default)
+  amadeus doctor [--quick]        check Ollama, models, GPU, venv, build; prints fixes
   amadeus help                    this message
 EOF
 }
@@ -96,9 +97,9 @@ case "$CMD" in
         ensure_tui
         exec "$TUI_BIN" --template code-helper --task "$*"
         ;;
-    replay)
+    replay|doctor)
         ensure_tui
-        exec "$TUI_BIN" replay "$@"
+        exec "$TUI_BIN" "$CMD" "$@"
         ;;
     help|-h|--help)
         usage

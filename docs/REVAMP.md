@@ -83,8 +83,10 @@ the task pre-submitted, so there's one loop and one approval UI.
 Every tool declares `needs_approval`. Reads (`read_file`, `list_dir`, `search_files`, `rag_query`) run
 straight away. Writes and commands (`write_file`, `run_command`) stop the loop and show a card:
 the command, or a unified diff of the file against what's on disk. The keys are **y** (run it), **n**
-(skip it, and the model is told it was declined), and **a** (approve this and the rest of this run).
-`/auto` turns auto-approve on for the next run only. Nothing is hard-coded to `--yes`.
+(skip it, and optionally say why; the model gets the reason), and **a** (approve this and the rest of
+this run). An exact repeat of a declined call is refused without asking again, because small models
+re-propose the same write after a plain "no". `/auto` turns auto-approve on for the next run only.
+Nothing is hard-coded to `--yes`.
 
 ### Workspace confinement
 
@@ -115,8 +117,26 @@ projects/<slug>/
    mouse, markdown, health check, source display). The `--yes` fix needs the approval UI, which needs
    the Rust loop, so it lands at the start of Phase 2 instead of as throwaway code in `agent.py`.
 2. Harness core: tools, templates, the Rust loop with approvals, run log. Delete `agent.py`.
-3. Demo: `amadeus doctor`, `demo/` workspace, `make demo`, DEMO.md, VHS tape, header bar, help overlay.
+3. Demo: `amadeus doctor`, `demo/` workspace, `make demo`, DEMO.md, header bar, help overlay. The VHS
+   tape was not made: `vhs` isn't installed here, and an unrun tape would be an untested claim.
 4. Docs + an end-to-end run of DEMO.md on the real models.
+
+## End-to-end run (2026-11-04)
+
+Ollama 0.40.14, RTX 5070 Laptop (8 GB), `qwen3:8b` at 100% GPU, driven through a real terminal under
+tmux. Baselines at the end of the branch: `make lint` clean, `make test` passes, `make eval` still
+reproduces recall@1 0.380, @3 0.640, @5 0.720, @10 0.800, MRR 0.592 (`rag/` wasn't touched).
+
+| template | time, model warm | tool steps | approvals | output |
+|---|---|---|---|---|
+| folder-summary | 14 s | 5 | 1 | usable, with errors |
+| notes-to-spreadsheet | 14 s | 3 | 2 (one declined with a reason) | numbers right, 4 invented vendors |
+| draft-replies | 18 s | 9 | 3 | not sendable: 2 of 3 replies break the policy |
+| code-helper | 8 s | 4 | 2 | correct |
+
+The harness worked in all four: approval cards, the decline reason reaching the model, confinement,
+run logs and `replay`. Accuracy is the weak part. This is one run per template, so it shows what can
+go wrong rather than how often. The README lists the specific errors.
 
 ## Dependencies considered
 
@@ -128,5 +148,5 @@ projects/<slug>/
 | tui-markdown 0.3.12 | MIT/Apache-2.0 | not used: needs ratatui 0.30, and our wrap cache needs per-line control anyway |
 | throbber-widgets-tui 0.11 | Zlib | not used: needs ratatui 0.30, Zlib is outside MIT/Apache/BSD, and a spinner is 3 lines |
 | crossterm mouse capture | MIT | **used** (already a dependency): wheel scroll. `AMADEUS_MOUSE=0` turns it off to get native selection |
-| charmbracelet/vhs | MIT | **used** for `demo/amadeus.tape`, an optional external tool, not a build dependency |
+| charmbracelet/vhs | MIT | not used yet: planned for a recorded demo, an optional external tool, not a build dependency |
 | block/goose, huggingface/smolagents | Apache-2.0 | design reference only: goose's per-tool approval modes, smolagents' tool spec (name, description, JSON-schema inputs). No code copied |

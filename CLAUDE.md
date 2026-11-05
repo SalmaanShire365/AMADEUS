@@ -1,6 +1,6 @@
 # AMADEUS
 
-Fully local AI coding assistant + codebase RAG. Everything runs through Ollama
+Fully local AI task harness + codebase RAG. Everything runs through Ollama
 on this machine (localhost:11434, RTX 5070). No API keys, no cloud.
 
 ## Layout
@@ -105,10 +105,9 @@ Measured 2026-10-14 when the fixtures grew 8 → 25. The old 8-query baseline wa
 2. **Multi-concept dilution** (`hq-lgi`). "how are convoys stored in dolt" retrieves convoy code but
    not the storage layer; the embedding averages concepts. Already failed: lexical rerank, IDF
    weighting. Candidates: query decomposition, model reranker.
-3. **Standalone CLI** (`amadeus-wyd`). `amadeus.sh` resolves its home from the script path, the TUI
-   from `AMADEUS_HOME`; pick one rule for both.
-4. **README is missing the TUI** (`amadeus-7ba`), still says `rag/venv` (the code uses
-   `amadeus/venv`), and doesn't mention `qwen2.5-coder:1.5b` isn't pulled by default here.
-5. **Negative queries aren't scored** (`amadeus-8wi`). `rag/eval/fixtures_negative.jsonl` holds 4
+3. **Negative queries aren't scored** (`amadeus-8wi`). `rag/eval/fixtures_negative.jsonl` holds 4
    queries with no answer in the corpus; `run_eval.py` ignores them, so the CLI distance threshold
    is untested.
+4. **Template output accuracy** (no bead yet; Dolt was down when this was found). On the 2026-11-04
+   run, `draft-replies` broke the support policy in 2 of 3 replies and `notes-to-spreadsheet` invented
+   vendors. README "How well they work" has the list. There's no eval for this yet.

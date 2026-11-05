@@ -62,6 +62,6 @@ Run this from `amadeus/amadeus.sh` if you haven't linked `amadeus` onto your `PA
 
 ## What to expect
 
-Measured once, on 2026-11-04, on an RTX 5070 Laptop (8 GB) with `qwen3:8b` already loaded: each task took 8 to 18 seconds. Your times will vary, and a cold model load adds to the first one.
+Measured once, on 2026-11-04, on an RTX 5070 Laptop (8 GB) with `qwen3:8b` already loaded: each task took 8 to 18 seconds. A later rerun of the summary took about 37. Your times will vary, and a cold model load adds to the first one.
 
 Model output changes from run to run, and **it contains mistakes**. In that run, the expense sheet invented vendors, and two of the three replies broke the support policy. The README lists them all. Don't present this as accurate output: what it shows is a local model doing real work where you can see and stop every change. Rehearse before showing anyone.

@@ -26,6 +26,8 @@ make demo      # build, run the doctor, open the TUI on a fresh copy of demo/wor
 
 `make demo` works on a temp copy, so the repo never collects demo output. [`demo/DEMO.md`](demo/DEMO.md) is the walkthrough.
 
+`make tui` builds and runs the TUI on its own. The launcher also rebuilds it whenever the sources are newer than the binary.
+
 To run it from anywhere, link the launcher onto your `PATH`:
 
 ```bash

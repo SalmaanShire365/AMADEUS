@@ -9,7 +9,7 @@ make demo
 
 `make demo` builds the TUI, runs `amadeus doctor`, and opens the TUI on a fresh copy of `demo/workspace` in a temp directory. Each run starts clean, and the repo stays untouched. If the doctor reports a problem, it prints the command that fixes it.
 
-In the TUI, `/use <template>` picks a template. Paste the task and press enter.
+In the TUI, `/use <template>` picks a template and fills in its example task, which is the one shown below. Press enter to run it. To run something else, edit the text first.
 
 ## 1. Summarize a folder
 

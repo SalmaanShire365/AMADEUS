@@ -14,10 +14,10 @@ CORPUS ?= $(HOME)/rag-corpus/gastown/internal
 DEMO_DIR ?= $(or $(TMPDIR),/tmp)/amadeus-demo
 
 .DEFAULT_GOAL := help
-.PHONY: help setup models demo eval index tui test lint check
+.PHONY: help setup models demo eval task-eval index tui test lint check
 
 help: ## list targets
-	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  make %-7s %s\n", $$1, $$2}'
+	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  make %-9s %s\n", $$1, $$2}'
 
 setup: ## create the venv, install Python deps, fetch Rust deps
 	test -x $(PY) || python3 -m venv $(VENV)
@@ -44,15 +44,20 @@ eval: ## retrieval eval (recall@k, MRR) against $(DATA)
 	@! test -e $(DATA)/index.db-journal || { echo "$(DATA) has a leftover index.db-journal (interrupted write). Opening it would roll it back; refusing."; exit 1; }
 	cd $(APP) && AMADEUS_RAG_DATA_DIR=$(DATA) $(PY) rag/eval/run_eval.py
 
+task-eval: ## score the templates on eval/workspace with a real model (slow; read amadeus/eval/README.md first)
+	cd $(APP)/eval && $(PY) run_eval.py $(ARGS)
+
 index: ## (re)build the eval index: CORPUS -> DATA
 	cd $(APP) && AMADEUS_RAG_DATA_DIR=$(DATA) $(PY) rag/rag.py index $(CORPUS)
 
 tui: ## build and run the TUI (release)
 	cd $(TUI) && cargo run --release
 
-test: ## Rust tests + Python byte-compile check
+test: ## Rust tests, Python byte-compile, task eval scorer and harness tests (no model)
 	cd $(TUI) && cargo test
 	$(PY) -m py_compile $(APP)/rag/rag.py $(APP)/rag/eval/run_eval.py
+	cd $(TUI) && cargo build --release --quiet
+	cd $(APP)/eval && $(PY) -B test_scoring.py && $(PY) -B test_harness.py
 
 lint: ## rustfmt check + clippy (warnings are errors)
 	cd $(TUI) && cargo fmt --check

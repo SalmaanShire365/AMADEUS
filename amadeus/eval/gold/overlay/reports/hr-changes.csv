@@ -1,0 +1,9 @@
+effective_date,employee_id,change_type,new_value
+2026-11-01,E1005,promotion,second shift dispatch lead trainee
+2026-09-14,E1023,leave,
+2026-08-28,E1020,termination,
+2026-10-01,E1014,salary_change,61000
+2026-12-01,,transfer,Grand Junction
+2026-11-15,E1021,salary_change,58500
+2026-03-31,E1024,termination,
+2026-12-07,,new_hire,

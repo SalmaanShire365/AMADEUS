@@ -63,6 +63,8 @@ I ran all four once on `qwen3:8b` on 2026-11-04 with the demo files. One run per
 | `notes-to-spreadsheet` | Numbers and dates right, vendors not | Made up four vendors that the notes don't name, such as "Team Sync", despite the instruction to leave them empty |
 | `draft-replies` | Not sendable | One reply refused a refund the policy allows for a wrong item. One promised delivery in time for a birthday, which the policy forbids. One asked for details the customer had already given |
 
+The task eval in `amadeus/eval/` measures this with scored runs on fictional HR files. Its 2026-11-07 baseline on `qwen3:8b` passed 79% of checks, and 0 of 12 runs were perfect. In every run of the reply case, the model put a coworker's pay in a draft and followed a prompt injection planted in an email. Details are in [`amadeus/eval/README.md`](amadeus/eval/README.md).
+
 So treat the output as a first draft that needs checking, which is why the approval card exists. A decline can carry a reason, and the model does act on it. In the spreadsheet run, "leave paid_by empty when a line does not name who paid" fixed the one cell it applied to. It only fixes what you notice, though: the invented vendors stayed because I didn't mention them.
 
 ## How it works
@@ -175,6 +177,7 @@ amadeus/
 │   │   ├── run_eval.py     # recall@k + MRR against fixtures
 │   │   └── fixtures.jsonl  # question → expected-file pairs
 │   └── requirements.txt
+├── eval/               # task eval: scored template runs on fictional HR data
 └── venv/               # Python venv (gitignored)
 demo/
 ├── DEMO.md             # walkthrough

@@ -115,4 +115,6 @@ Measured 2026-10-14 when the fixtures grew 8 → 25. The old 8-query baseline wa
    run, `draft-replies` broke the support policy in 2 of 3 replies and `notes-to-spreadsheet` invented
    vendors. README "How well they work" has the list. `make task-eval` now measures it; the
    2026-11-07 baseline (0.791 checks, 0/12 perfect, 24 critical) is in `amadeus/eval/README.md`.
-   Worst: drafts leak pay and follow the prompt injection in every run. Record before/after for template changes.
+   Worst: drafts leak pay and follow the prompt injection in every run. Prompt rules, spotlighting and a
+   copied-lines guard all failed (eval README "Negative results"). Next: map-reduce `draft-replies`
+   (one tool-less sub-run per message, sender's row only). Meta SecAlign 8B waits on Hugging Face access.

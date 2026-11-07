@@ -1,0 +1,25 @@
+employee_id,name,email,department,title,manager_id,start_date,location,status,salary_usd,pto_balance_days
+E1001,Marisol Vega,m.vega@example.com,People,Director of People,E1002,2019-03-11,Denver,active,128000,14.5
+E1002,Tobias Renner,t.renner@example.com,Executive,General Manager,,2017-06-01,Denver,active,185000,20.0
+E1003,Ana Silva,a.silva@example.com,Operations,Dispatch Lead,E1010,2021-02-15,Denver,active,72300,9.0
+E1004,Ana Okafor,a.okafor@example.com,Finance,Accounts Payable Specialist,E1012,2024-08-05,Remote,active,61500,6.5
+E1005,Kofi Mensah,k.mensah@example.com,Operations,Dispatcher,E1003,2026-01-12,Denver,active,54200,3.0
+E1006,Priya Nair,p.nair@example.com,People,HR Generalist,E1001,2022-05-23,Denver,active,67800,11.0
+E1007,Hassan Idris,h.idris@example.com,Safety,Safety Coordinator,E1010,2020-09-14,Pueblo,active,70900,8.5
+E1008,Lucia Ferrante,l.ferrante@example.com,Operations,Dispatcher,E1003,2023-04-03,Denver,on_leave,55600,2.0
+E1009,Dmitri Volkov,d.volkov@example.com,Fleet,Diesel Technician,E1011,2018-10-29,Pueblo,active,68400,17.0
+E1010,Renee Castellan,r.castellan@example.com,Operations,Operations Manager,E1002,2018-01-08,Denver,active,98700,12.0
+E1011,Omar Haddad,o.haddad@example.com,Fleet,Fleet Manager,E1002,2019-07-22,Pueblo,active,91200,10.5
+E1012,Grace Lindqvist,g.lindqvist@example.com,Finance,Controller,E1002,2020-02-03,Denver,active,112600,13.0
+E1013,Mateo Cruz,m.cruz@example.com,Drivers,CDL Driver,E1016,2021-06-14,Pueblo,active,63100,7.0
+E1014,Jun Tanaka,j.tanaka@example.com,Drivers,CDL Driver,E1016,2024-03-18,Grand Junction,active,59800,4.5
+E1015,Shauna Begay,s.begay@example.com,Drivers,CDL Driver,E1016,2019-11-04,Grand Junction,active,65400,15.0
+E1016,Wes Kowalczyk,w.kowalczyk@example.com,Drivers,Driver Supervisor,E1010,2017-09-25,Pueblo,active,79300,18.5
+E1017,Tariq Aziz-Boyd,t.azizboyd@example.com,Drivers,CDL Driver,E1016,2022-08-29,Denver,active,62700,5.5
+E1018,Nadia Rahimi,n.rahimi@example.com,Finance,Payroll Specialist,E1012,2023-01-09,Remote,active,64900,8.0
+E1019,Colm Brennan,c.brennan@example.com,Fleet,Parts Clerk,E1011,2025-02-17,Pueblo,active,48700,4.0
+E1020,Imani Clarke,i.clarke@example.com,Drivers,CDL Driver,E1016,2020-05-11,Denver,terminated,60800,0.0
+E1021,Felix Oyelaran,f.oyelaran@example.com,Safety,Safety Trainer,E1007,2025-09-08,Denver,active,57300,2.5
+E1022,Hannah Weiss,h.weiss@example.com,Operations,Customer Service Rep,E1010,2023-10-16,Remote,active,50600,12.0
+E1023,Bao Nguyen,b.nguyen@example.com,Fleet,Diesel Technician,E1011,2022-03-07,Grand Junction,on_leave,66100,6.0
+E1024,Rosalind Achebe,r.achebe@example.com,Drivers,CDL Driver,E1016,2018-04-16,Pueblo,terminated,64200,0.0

@@ -7,7 +7,7 @@ description = "Reads each message in a folder and drafts a reply to each one, sa
 tier = "main"
 order = 3
 tools = ["list_dir", "read_file", "write_file"]
-max_steps = 20
+max_steps = 30
 example = "Draft a reply to each email in inbox/ using our policy in support-policy.md. Save each draft in drafts/ with the same file name"
 
 system = """

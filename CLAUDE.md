@@ -11,6 +11,7 @@ amadeus/rag/rag.py       chunk -> embed (jina-embeddings-v2-base-code) -> sqlite
 amadeus/rag/eval/        run_eval.py (recall@k, MRR) + fixtures.jsonl (query -> expected files)
 amadeus/tui/             Rust/ratatui front end and agent loop (binary: amadeus-tui)
 amadeus/templates/       task templates (TOML) the agent loop runs
+amadeus/eval/            task eval: run_eval.py, scorer, harness tests, fictional HR workspace
 amadeus/venv/            Python venv (gitignored); deps in rag/requirements.txt
 demo/workspace/          fictional sample files that `make demo` copies to a temp dir
 docs/                    GitHub Pages site (index.html), REVAMP.md plan
@@ -20,8 +21,9 @@ docs/                    GitHub Pages site (index.html), REVAMP.md plan
 
 - Working copy: `~/gt/amadeus/crew/salmaan`, a Gas Town crew clone. Code lives under `amadeus/`;
   run `make` from the repo root.
-- `~/.local/bin/amadeus` symlinks to `amadeus/amadeus.sh`, and `AMADEUS_HOME` (in `~/.bashrc`) points
-  at `~/gt/amadeus/crew/salmaan/amadeus`. Launcher and TUI must resolve to the same checkout.
+- `~/.local/bin/amadeus` symlinks to `amadeus/amadeus.sh`. The launcher sets `AMADEUS_HOME` from its own
+  path, overriding `~/.bashrc`, and the TUI resolves from its executable's checkout first, so the
+  checkout you launch is the checkout you run.
 - Gas Town files (`.beads/`, `.claude/commands/{review,done,handoff}.md`) are excluded via
   `.git/info/exclude`, not `.gitignore`, so they never reach GitHub.
 - Open problems are tracked as beads: rig work in `bd -C ~/gt/amadeus list`, town-level in
@@ -43,6 +45,7 @@ make setup    venv + pip install + cargo fetch
 make models   pull the default main + fast models
 make demo     build, run the doctor, open the TUI on a fresh copy of demo/workspace
 make eval     retrieval eval against $AMADEUS_RAG_DATA_DIR (default ~/.amadeus-notest)
+make task-eval  score the templates with a real model; read amadeus/eval/README.md first
 make index    rebuild that index from ~/rag-corpus/gastown/internal
 make tui      cargo run --release
 make test     cargo test + Python byte-compile
@@ -108,6 +111,8 @@ Measured 2026-10-14 when the fixtures grew 8 → 25. The old 8-query baseline wa
 3. **Negative queries aren't scored** (`amadeus-8wi`). `rag/eval/fixtures_negative.jsonl` holds 4
    queries with no answer in the corpus; `run_eval.py` ignores them, so the CLI distance threshold
    is untested.
-4. **Template output accuracy** (no bead yet; Dolt was down when this was found). On the 2026-11-04
+4. **Template output accuracy** (`amadeus-q0a`). On the 2026-11-04
    run, `draft-replies` broke the support policy in 2 of 3 replies and `notes-to-spreadsheet` invented
-   vendors. README "How well they work" has the list. There's no eval for this yet.
+   vendors. README "How well they work" has the list. `make task-eval` now measures it; the
+   2026-11-07 baseline (0.791 checks, 0/12 perfect, 24 critical) is in `amadeus/eval/README.md`.
+   Worst: drafts leak pay and follow the prompt injection in every run. Record before/after for template changes.

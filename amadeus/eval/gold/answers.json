@@ -1,0 +1,8 @@
+{
+  "draft-hr-replies": "01 02 03 04 05 06: all drafted.",
+  "expense-notes": "11 rows. Skipped the duplicate on 8/14.",
+  "hr-change-log": "8 rows. The note about Ana doesn't say which Ana, so employee_id is empty.",
+  "hr-meeting-briefing": "Saved to hr-meetings/SUMMARY.md.",
+  "pto-bug-fix": "Fixed.",
+  "headcount-script": "Done."
+}

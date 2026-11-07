@@ -5,6 +5,7 @@
 //! without calling a tool, the step budget runs out, or the user cancels.
 //! Every step is written to the run log.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
@@ -77,6 +78,14 @@ fn native(calls: &[Call]) -> Value {
     )
 }
 
+/// The workspace path a file tool call names, normalised so `./a.txt` and
+/// `a.txt` match.
+fn read_key(call: &Call) -> Option<String> {
+    let p = call.args["path"].as_str()?.trim();
+    let p = p.trim_start_matches("./").trim_end_matches('/');
+    (!p.is_empty()).then(|| p.to_string())
+}
+
 fn wait_for(rx: &mpsc::Receiver<Verdict>, cancel: &AtomicBool) -> Option<Verdict> {
     loop {
         match rx.recv_timeout(Duration::from_millis(100)) {
@@ -121,6 +130,11 @@ pub fn run(spec: RunSpec, id: u64, tx: Sender<AppEvent>, cancel: Arc<AtomicBool>
     // same write after a plain "no" (seen live with qwen3:8b); asking again
     // would loop until the step limit.
     let mut declined: Vec<String> = Vec::new();
+    // Files read this run and not changed since. qwen3:8b re-reads a folder
+    // of short files in a cycle instead of writing (seen in the task eval's
+    // draft-hr-replies case: 0 of 3 runs wrote a draft). Sending the file
+    // again feeds the loop; telling it the contents are already above breaks it.
+    let mut read: HashSet<String> = HashSet::new();
     let end = 'run: loop {
         if steps >= t.max_steps {
             break End::OutOfSteps;
@@ -241,6 +255,28 @@ pub fn run(spec: RunSpec, id: u64, tx: Sender<AppEvent>, cancel: Arc<AtomicBool>
                 continue;
             }
 
+            let path = read_key(&call);
+            if call.name == "read_file" && path.as_ref().is_some_and(|p| read.contains(p)) {
+                let msg = "already read, not sent again".to_string();
+                let _ = tx.send(AppEvent::Tool {
+                    id,
+                    headline,
+                    summary: msg.clone(),
+                    ok: true,
+                });
+                log.log(
+                    "tool_result",
+                    json!({"name": call.name, "ok": true, "summary": msg}),
+                );
+                messages.push(result(
+                    "You already read this file in this run and it hasn't changed. Its contents are \
+                     above. Don't read it again: use what you have and go on to the next step of \
+                     your task."
+                        .into(),
+                ));
+                continue;
+            }
+
             if gate.must_ask(ts.needs_approval) {
                 let preview = match tools::preview(&ws, &call) {
                     Ok(p) => p,
@@ -321,6 +357,17 @@ pub fn run(spec: RunSpec, id: u64, tx: Sender<AppEvent>, cancel: Arc<AtomicBool>
             }
 
             let out = tools::execute(&ws, &call, &cancel);
+            match call.name.as_str() {
+                "read_file" if out.ok => read.extend(path),
+                "write_file" => {
+                    if let Some(p) = &path {
+                        read.remove(p);
+                    }
+                }
+                // A command can change any file.
+                "run_command" => read.clear(),
+                _ => {}
+            }
             log.log(
                 "tool_result",
                 json!({"name": call.name, "ok": out.ok, "summary": out.summary,
@@ -627,6 +674,63 @@ mod tests {
             r.events
         );
         assert_eq!(r.events.last().unwrap(), "done");
+        let _ = fs::remove_dir_all(r.ws);
+    }
+
+    #[test]
+    fn a_repeated_read_is_not_sent_again() {
+        let r = run_with(
+            "reread",
+            &["read_file"],
+            vec![
+                call("read_file", json!({"path": "a.txt"})),
+                call("read_file", json!({"path": "./a.txt"})),
+                json!({"content": "done"}),
+            ],
+            Decision::Approve,
+            false,
+        );
+        let tools: Vec<&str> = r
+            .messages
+            .iter()
+            .filter(|m| m["role"] == "tool")
+            .map(|m| m["content"].as_str().unwrap())
+            .collect();
+        assert_eq!(tools.len(), 2, "{tools:?}");
+        assert!(tools[0].contains("hello from a"), "{tools:?}");
+        assert!(tools[1].contains("already read"), "{tools:?}");
+        assert!(r.log.contains("already read, not sent again"));
+        assert_eq!(r.events.last().unwrap(), "done");
+        let _ = fs::remove_dir_all(r.ws);
+    }
+
+    #[test]
+    fn a_read_after_a_write_to_that_file_gets_the_new_contents() {
+        let r = run_with(
+            "reread-write",
+            &["read_file", "write_file"],
+            vec![
+                call("read_file", json!({"path": "a.txt"})),
+                call(
+                    "write_file",
+                    json!({"path": "a.txt", "content": "changed\n"}),
+                ),
+                call("read_file", json!({"path": "a.txt"})),
+                json!({"content": "done"}),
+            ],
+            Decision::Approve,
+            true,
+        );
+        let last = r
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m["role"] == "tool")
+            .unwrap();
+        assert!(
+            last["content"].as_str().unwrap().contains("changed"),
+            "{last}"
+        );
         let _ = fs::remove_dir_all(r.ws);
     }
 

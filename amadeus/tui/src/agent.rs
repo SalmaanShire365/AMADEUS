@@ -96,6 +96,99 @@ fn wait_for(rx: &mpsc::Receiver<Verdict>, cancel: &AtomicBool) -> Option<Verdict
     }
 }
 
+/// How a side-effecting call came out of the approval gate.
+pub(crate) enum Gated {
+    Ran(tools::Outcome),
+    /// The user said no, with their note if they gave one.
+    Declined(Option<String>),
+    /// The call couldn't be previewed (bad path, missing argument).
+    Refused(String),
+    Cancelled,
+}
+
+/// Ask where the gate says to, then run the call. Logs the approval and the
+/// result, and reports the result to the UI. A decline is only logged: what
+/// the UI and the model are told about it is up to the caller.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn approve_and_run(
+    ws: &Workspace,
+    gate: &mut Gate,
+    call: &Call,
+    needs_approval: bool,
+    log: &mut RunLog,
+    tx: &Sender<AppEvent>,
+    id: u64,
+    cancel: &AtomicBool,
+) -> Gated {
+    let headline = call.headline();
+    if gate.must_ask(needs_approval) {
+        let preview = match tools::preview(ws, call) {
+            Ok(p) => p,
+            Err(e) => {
+                let _ = tx.send(AppEvent::Tool {
+                    id,
+                    headline,
+                    summary: e.clone(),
+                    ok: false,
+                });
+                log.log(
+                    "tool_result",
+                    json!({"name": call.name, "ok": false, "summary": e}),
+                );
+                return Gated::Refused(e);
+            }
+        };
+        let (rtx, rrx) = mpsc::channel();
+        let _ = tx.send(AppEvent::Approval {
+            id,
+            title: preview.title,
+            body: preview.body,
+            reply: rtx,
+        });
+        let Some(v) = wait_for(&rrx, cancel) else {
+            log.log(
+                "approval",
+                json!({"decision": "cancelled", "headline": headline}),
+            );
+            return Gated::Cancelled;
+        };
+        let d = v.decision;
+        gate.record(d);
+        let note = v
+            .note
+            .as_deref()
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+            .map(str::to_string);
+        log.log(
+            "approval",
+            json!({"decision": d.label(), "headline": headline, "note": note}),
+        );
+        if !d.allows() {
+            return Gated::Declined(note);
+        }
+    } else if needs_approval {
+        log.log(
+            "approval",
+            json!({"decision": "auto-approved", "headline": headline}),
+        );
+    }
+
+    let out = tools::execute(ws, call, cancel);
+    log.log(
+        "tool_result",
+        json!({"name": call.name, "ok": out.ok, "summary": out.summary,
+               "output": out.output.chars().take(4000).collect::<String>()}),
+    );
+    let _ = tx.send(AppEvent::Tool {
+        id,
+        headline,
+        summary: out.summary.clone(),
+        ok: out.ok,
+    });
+    Gated::Ran(out)
+}
+
 enum End {
     Done,
     Cancelled,
@@ -277,51 +370,23 @@ pub fn run(spec: RunSpec, id: u64, tx: Sender<AppEvent>, cancel: Arc<AtomicBool>
                 continue;
             }
 
-            if gate.must_ask(ts.needs_approval) {
-                let preview = match tools::preview(&ws, &call) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        let _ = tx.send(AppEvent::Tool {
-                            id,
-                            headline,
-                            summary: e.clone(),
-                            ok: false,
-                        });
-                        log.log(
-                            "tool_result",
-                            json!({"name": call.name, "ok": false, "summary": e}),
-                        );
-                        messages.push(result(format!("error: {e}")));
-                        continue;
-                    }
-                };
-                let (rtx, rrx) = mpsc::channel();
-                let _ = tx.send(AppEvent::Approval {
-                    id,
-                    title: preview.title,
-                    body: preview.body,
-                    reply: rtx,
-                });
-                let Some(v) = wait_for(&rrx, &cancel) else {
-                    log.log(
-                        "approval",
-                        json!({"decision": "cancelled", "headline": headline}),
-                    );
-                    break 'run End::Cancelled;
-                };
-                let d = v.decision;
-                gate.record(d);
-                let note = v
-                    .note
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|n| !n.is_empty())
-                    .map(str::to_string);
-                log.log(
-                    "approval",
-                    json!({"decision": d.label(), "headline": headline, "note": note}),
-                );
-                if !d.allows() {
+            let out = match approve_and_run(
+                &ws,
+                &mut gate,
+                &call,
+                ts.needs_approval,
+                &mut log,
+                &tx,
+                id,
+                &cancel,
+            ) {
+                Gated::Ran(out) => out,
+                Gated::Cancelled => break 'run End::Cancelled,
+                Gated::Refused(e) => {
+                    messages.push(result(format!("error: {e}")));
+                    continue;
+                }
+                Gated::Declined(note) => {
                     declined.push(fingerprint);
                     let (summary, told) = match &note {
                         Some(n) => (
@@ -349,14 +414,7 @@ pub fn run(spec: RunSpec, id: u64, tx: Sender<AppEvent>, cancel: Arc<AtomicBool>
                     messages.push(result(told));
                     continue;
                 }
-            } else if ts.needs_approval {
-                log.log(
-                    "approval",
-                    json!({"decision": "auto-approved", "headline": headline}),
-                );
-            }
-
-            let out = tools::execute(&ws, &call, &cancel);
+            };
             match call.name.as_str() {
                 "read_file" if out.ok => read.extend(path),
                 "write_file" => {
@@ -368,17 +426,6 @@ pub fn run(spec: RunSpec, id: u64, tx: Sender<AppEvent>, cancel: Arc<AtomicBool>
                 "run_command" => read.clear(),
                 _ => {}
             }
-            log.log(
-                "tool_result",
-                json!({"name": call.name, "ok": out.ok, "summary": out.summary,
-                       "output": out.output.chars().take(4000).collect::<String>()}),
-            );
-            let _ = tx.send(AppEvent::Tool {
-                id,
-                headline,
-                summary: out.summary,
-                ok: out.ok,
-            });
             messages.push(result(out.output));
             if cancel.load(Ordering::Relaxed) {
                 break 'run End::Cancelled;
@@ -419,7 +466,7 @@ pub fn run(spec: RunSpec, id: u64, tx: Sender<AppEvent>, cancel: Arc<AtomicBool>
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::approval::Decision;
     use crate::templates;
@@ -432,7 +479,7 @@ mod tests {
 
     /// A fake Ollama: answers /api/show, and serves scripted /api/chat replies
     /// in order. Returns the base URL and every chat request body it saw.
-    fn stub(replies: Vec<Value>) -> (String, Arc<Mutex<Vec<Value>>>) {
+    pub(crate) fn stub(replies: Vec<Value>) -> (String, Arc<Mutex<Vec<Value>>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let queue = Arc::new(Mutex::new(VecDeque::from(replies)));

@@ -1044,7 +1044,11 @@ impl App {
             log_dir: self.cfg.runs_dir.clone(),
         };
         let (tx, cancel) = (self.tx.clone(), self.cancel.clone());
-        thread::spawn(move || agent::run(spec, id, tx, cancel));
+        if spec.template.is_map() {
+            thread::spawn(move || crate::map::run(spec, id, tx, cancel));
+        } else {
+            thread::spawn(move || agent::run(spec, id, tx, cancel));
+        }
     }
 
     fn stage_file(&mut self, path: &str) {

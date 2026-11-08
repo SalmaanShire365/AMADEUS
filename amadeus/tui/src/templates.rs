@@ -29,6 +29,38 @@ pub struct Template {
     /// Position in the picker; lower first, then by name.
     #[serde(default = "default_order")]
     pub order: u32,
+    /// "agent" (default): one model conversation with tools. "map": the
+    /// harness runs one tool-less model call per input file; see map.rs.
+    #[serde(default = "default_mode")]
+    pub mode: String,
+    /// Map mode: table columns the model never sees, matched as
+    /// case-insensitive substrings of the header ("salary" drops salary_usd).
+    #[serde(default = "default_private")]
+    pub private_columns: Vec<String>,
+}
+
+fn default_mode() -> String {
+    "agent".into()
+}
+
+fn default_private() -> Vec<String> {
+    [
+        "salary",
+        "pay",
+        "wage",
+        "compensation",
+        "bonus",
+        "ssn",
+        "social",
+        "tax",
+        "bank",
+        "account",
+        "birth",
+        "dob",
+        "password",
+    ]
+    .map(String::from)
+    .to_vec()
 }
 
 fn default_order() -> u32 {
@@ -52,6 +84,10 @@ impl Template {
         }
     }
 
+    pub fn is_map(&self) -> bool {
+        self.mode == "map"
+    }
+
     pub fn uses_approval(&self) -> bool {
         self.tools
             .iter()
@@ -73,6 +109,14 @@ pub fn parse(text: &str) -> Result<Template, String> {
     }
     if !matches!(t.tier.as_str(), "fast" | "main" | "heavy") {
         return Err(format!("tier {:?} must be fast, main or heavy", t.tier));
+    }
+    match t.mode.as_str() {
+        "agent" => {}
+        // The harness lists, reads and writes on the model's behalf, and
+        // `tools` still decides what the picker says about approval.
+        "map" if t.tools.iter().any(|n| n == "write_file") => {}
+        "map" => return Err("mode \"map\" needs write_file in tools".into()),
+        other => return Err(format!("mode {other:?} must be agent or map")),
     }
     Ok(t)
 }
@@ -140,6 +184,17 @@ tier = "fast"
             e.contains("delete_everything") && e.contains("read_file"),
             "{e}"
         );
+    }
+
+    #[test]
+    fn map_mode_needs_write_file_and_has_private_defaults() {
+        let t = parse(&format!("{OK}mode = \"map\"\n")).unwrap();
+        assert!(t.is_map() && t.private_columns.iter().any(|c| c == "salary"));
+        assert!(!parse(OK).unwrap().is_map());
+        let e =
+            parse(&format!("{OK}mode = \"map\"\n").replace(", \"write_file\"", "")).unwrap_err();
+        assert!(e.contains("write_file"), "{e}");
+        assert!(parse(&format!("{OK}mode = \"swarm\"\n")).is_err());
     }
 
     #[test]

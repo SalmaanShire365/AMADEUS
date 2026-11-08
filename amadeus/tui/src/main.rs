@@ -7,6 +7,7 @@ mod event;
 mod health;
 mod hint;
 mod history;
+mod map;
 mod ollama;
 mod paths;
 mod proc;

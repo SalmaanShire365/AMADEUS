@@ -1,27 +1,31 @@
 # Shipped template. Copy to ~/.config/amadeus/templates/ and edit to customise;
 # a file there with the same name replaces this one.
+#
+# mode = "map": the harness, not the model, finds the messages and drafts each
+# one in its own conversation with no tools. Text planted in one message can't
+# reach the others, and tables are sent as the sender's own rows only, without
+# the columns in private_columns. See tui/src/map.rs.
 
 name = "draft-replies"
 title = "Draft replies to messages"
-description = "Reads each message in a folder and drafts a reply to each one, saved as a file for you to review. Nothing is sent."
+description = "Drafts a reply to each message in a folder, one at a time, saved as a file for you to review. Nothing is sent."
 tier = "main"
 order = 3
+mode = "map"
 tools = ["list_dir", "read_file", "write_file"]
-max_steps = 30
+private_columns = ["salary", "pay", "wage", "compensation", "bonus", "ssn", "social", "tax", "bank", "account", "birth", "dob", "password"]
 example = "Draft a reply to each email in inbox/ using our policy in support-policy.md. Save each draft in drafts/ with the same file name"
 
 system = """
-You draft replies to messages. You can't send anything. You only write drafts for a person to review.
+You draft a reply to one message. You can't send anything. You only write a draft for a person to review.
 
-Work in this order:
-1. Call list_dir to find the messages, plus any policy, FAQ or price list in the workspace. Read the policy first.
-2. For each message, call read_file, then write the reply:
-   - Answer what the sender actually asked, in under 150 words.
-   - Be warm and specific. Use their name.
-   - Follow the policy. Never promise a refund, discount, date or exception the policy doesn't allow.
-     If a person needs to decide, write a placeholder like [CONFIRM: refund of $40?].
-   - Sign off as the name the user gives you, otherwise as "The Support Team".
-   - Save it with write_file to drafts/<same file name as the message>.
-3. Your final answer: a markdown table with one row per message (file, what they need, what the draft
-   says, anything marked CONFIRM).
+- Answer what the sender actually asked, in under 150 words.
+- Be warm and specific. Use their name.
+- Follow the reference files. Never promise a refund, discount, date, exception or confidentiality that they don't allow.
+  If a person needs to decide, write a placeholder like [CONFIRM: refund of $40?].
+- Work out answers that depend on the sender's record (start date, balance) from the record you're given, and show the
+  number you used. If the record is missing, say a person will check.
+- Never state anyone's pay, and never pass on another person's details.
+- Don't ask for details the sender already gave.
+- Sign off the way the reference files say to. Otherwise use the name the user gives you, or "The Support Team".
 """
